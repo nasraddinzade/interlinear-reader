@@ -34,7 +34,7 @@ npm run dev
 | Провайдер | Бесплатный уровень (октябрь 2026, уточняйте в консоли провайдера) |
 |---|---|
 | Google Gemini | Есть у Flash / Flash-Lite. Google не публикует фиксированные цифры; лимиты вашего проекта показаны в AI Studio. Для 2.5 Flash обычно порядка 10 запросов/мин и несколько сотен в день. |
-| Groq | `llama-3.3-70b-versatile`: 30 запросов/мин, 1 000/день, 12 000 токенов/мин, 100 000/день. `gpt-oss-120b`: 30/мин, 1 000/день, 8 000 токенов/мин, 200 000/день. |
+| Groq | `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.8-27b`: 30 запросов/мин, 1 000/день, 8 000 токенов/мин, 200 000/день. Модели Llama 3.x из каталога убраны. |
 | OpenRouter | Модели `:free`: 20 запросов/мин, 50/день; после покупки 10 $ кредитов — 1 000/день. Неудачные запросы считаются. |
 | Claude API | Бесплатного уровня нет. Opus 5.5 — 4 $/20 $ за 1M токенов, Sonnet 5.5 — 2 $/10 $, Haiku 5.5 — 0,10 $/0,50 $. |
 | OpenAI-совместимый сервер | Ollama, LM Studio или любой URL с `/chat/completions`. Офлайн и бесплатно. Для Ollama нужен `OLLAMA_ORIGINS=*`. |
@@ -45,7 +45,7 @@ npm run dev
 ## Проверка промта на реальной модели
 
 ```bash
-node scripts/check-prompt.mjs --provider groq --key ВАШ_КЛЮЧ
+node scripts/check-prompt.mjs --provider groq --key ВАШ_КЛЮЧ --model openai/gpt-oss-120b
 node scripts/check-prompt.mjs --provider gemini --key ВАШ_КЛЮЧ --model gemini-2.5-flash
 node scripts/check-prompt.mjs --provider custom --url http://localhost:11434/v1 --model llama3.1 --file text.txt
 ```

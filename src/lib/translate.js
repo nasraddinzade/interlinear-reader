@@ -54,6 +54,27 @@ function finalize(sentence, gloss) {
   };
 }
 
+/**
+ * Сопоставляет ответ модели с входными предложениями по выравниванию токенов,
+ * а не по позиции: модель может пропустить или переставить предложения.
+ * Возвращает массив той же длины, что texts; null — предложение в ответе не нашлось.
+ */
+export function matchResults(texts, glosses) {
+  const used = new Set();
+  const out = texts.map(() => null);
+  texts.forEach((s, i) => {
+    for (let k = 0; k < glosses.length; k++) {
+      if (used.has(k)) continue;
+      if (alignTokens(s, glosses[k].tokens).ok) { used.add(k); out[i] = glosses[k]; break; }
+    }
+  });
+  // Если количество совпало, невыровненные берём по позиции — их всё равно перепроверит повтор.
+  if (glosses.length === texts.length) {
+    texts.forEach((_, i) => { if (!out[i] && !used.has(i)) { out[i] = glosses[i]; used.add(i); } });
+  }
+  return out;
+}
+
 function chunk(arr, n) {
   const out = [];
   for (let i = 0; i < arr.length; i += Math.max(1, n)) out.push(arr.slice(i, i + Math.max(1, n)));
@@ -72,15 +93,17 @@ function errorMessage(e) {
  * onStatus(text) — для строки состояния (повторы, паузы).
  */
 export async function glossMissing({ sentences, indexes, provider, batchSize = 10, onResult, onStatus, signal }) {
-  for (const batch of chunk(indexes, batchSize)) {
+  const size = Math.max(1, Math.min(batchSize, provider.maxBatch || Infinity));
+  for (const batch of chunk(indexes, size)) {
     if (signal?.aborted) return;
     const texts = batch.map((i) => sentences[i]);
     let results;
     try {
-      results = await withRetry(() => provider.glossBatch(texts, { signal }), {
+      const raw = await withRetry(() => provider.glossBatch(texts, { signal }), {
         signal,
         onRetry: (n, delay, e) => onStatus?.(`Ошибка: ${errorMessage(e)}. Повтор ${n}/3 через ${Math.round(delay / 1000)} с…`),
       });
+      results = matchResults(texts, raw);
       onStatus?.('');
     } catch (e) {
       if (signal?.aborted) return;
@@ -92,21 +115,27 @@ export async function glossMissing({ sentences, indexes, provider, batchSize = 1
     for (let k = 0; k < batch.length; k++) {
       const i = batch[k];
       const sentence = sentences[i];
-      let gloss = finalize(sentence, results[k]);
-      if (!gloss.aligned) {
-        // Правило 1 нарушено — повторяем запрос для этого предложения один раз.
-        onStatus?.(`Токены не совпали с предложением ${i + 1}, повторный запрос…`);
+      let gloss = results[k] ? finalize(sentence, results[k]) : null;
+      if (!gloss || !gloss.aligned) {
+        // Предложение пропущено или правило 1 нарушено — повторяем запрос для него одного.
+        onStatus?.(gloss ? `Токены не совпали с предложением ${i + 1}, повторный запрос…` : `Модель пропустила предложение ${i + 1}, повторный запрос…`);
         try {
-          const [again] = await withRetry(() => provider.glossBatch([sentence], { signal }), { retries: 1, signal });
-          const g2 = finalize(sentence, again);
-          if (g2.aligned) gloss = g2;
-          else console.warn('[gloss] alignment failed twice for sentence', i + 1, gloss.alignError, '|', g2.alignError);
+          const raw2 = await withRetry(() => provider.glossBatch([sentence], { signal }), {
+            retries: 2, signal,
+            onRetry: (n, delay, e) => onStatus?.(`Ошибка: ${errorMessage(e)}. Повтор ${n}/2 через ${Math.round(delay / 1000)} с…`),
+          });
+          const [again] = matchResults([sentence], raw2);
+          const g2 = again ? finalize(sentence, again) : raw2[0] ? finalize(sentence, raw2[0]) : null;
+          if (g2 && (g2.aligned || !gloss)) gloss = g2;
+          if (gloss && !gloss.aligned) console.warn('[gloss] alignment failed twice for sentence', i + 1, gloss.alignError);
         } catch (e) {
           if (signal?.aborted) return;
           console.warn('[gloss] retry failed', e);
+          if (!gloss) { onStatus?.(''); onResult(i, { error: errorMessage(e) }); continue; }
         }
         onStatus?.('');
       }
+      if (!gloss) { onResult(i, { error: 'Модель не вернула перевод этого предложения' }); continue; }
       if (provider.cacheable) await storeCache(sentence, provider.name, gloss);
       if (signal?.aborted) return;
       onResult(i, { gloss });

@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import { createProvider } from '../src/lib/providers/index.js';
 import { splitIntoSentences } from '../src/lib/segment.js';
 import { alignTokens, joinTokens } from '../src/lib/align.js';
+import { withRetry, matchResults } from '../src/lib/translate.js';
 
 const args = Object.fromEntries(
   process.argv.slice(2).reduce((acc, a, i, arr) => {
@@ -34,14 +35,23 @@ const { sentences } = splitIntoSentences(text);
 console.log(`Провайдер: ${provider}${args.model ? ' / ' + args.model : ''}; предложений: ${sentences.length}`);
 
 const p = createProvider(settings);
-const batch = Number(args.batch || 10);
+const batch = Math.min(Number(args.batch || 10), p.maxBatch || Infinity);
 const results = [];
+let skipped = 0;
+const onRetry = (n, delay, e) => console.log(`    ошибка: ${e.message.slice(0, 160)}; повтор ${n} через ${Math.round(delay / 1000)} с`);
 for (let i = 0; i < sentences.length; i += batch) {
   const slice = sentences.slice(i, i + batch);
   const t0 = Date.now();
-  const out = await p.glossBatch(slice);
-  console.log(`  пачка ${i / batch + 1}: ${slice.length} предл. за ${Date.now() - t0} мс`);
-  results.push(...out);
+  const raw = await withRetry(() => p.glossBatch(slice), { onRetry });
+  const matched = matchResults(slice, raw);
+  console.log(`  пачка ${i / batch + 1}: ${slice.length} предл. за ${Date.now() - t0} мс, в ответе ${raw.length}`);
+  for (let k = 0; k < slice.length; k++) {
+    if (matched[k]) { results.push(matched[k]); continue; }
+    skipped++;
+    console.log(`    предложение ${i + k + 1} пропущено моделью, запрашиваю отдельно`);
+    const [one] = await withRetry(() => p.glossBatch([slice[k]]), { onRetry });
+    results.push(one);
+  }
 }
 
 let exact = 0;
@@ -59,7 +69,7 @@ results.forEach((g, i) => {
   }
 });
 
-console.log(`\nКонкатенация совпала посимвольно: ${exact} из ${sentences.length}`);
+console.log(`\nКонкатенация совпала посимвольно: ${exact} из ${sentences.length}; пропущено моделью в пачках и дозапрошено: ${skipped}`);
 if (problems.length) console.log('Расхождения:\n' + problems.join('\n'));
 console.log(`\nМногословные токены (${phrasal.length}):\n  ` + phrasal.join('\n  '));
 console.log(`\nЛеммы неправильных глаголов и форм be:\n  ` + lemmas.join('\n  '));

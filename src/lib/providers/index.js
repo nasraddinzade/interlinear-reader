@@ -47,11 +47,12 @@ export const PROVIDERS = [
     name: 'Groq',
     needsKey: true,
     keyUrl: 'https://console.groq.com/keys',
-    defaultModel: 'llama-3.3-70b-versatile',
-    models: ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'],
+    defaultModel: 'openai/gpt-oss-120b',
+    models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'],
     note:
-      'Бесплатный уровень (октябрь 2026): llama-3.3-70b-versatile — 30 запросов/мин, 1 000/день, 12 000 токенов/мин, 100 000 токенов/день; ' +
-      'gpt-oss-120b — 30/мин, 1 000/день, 8 000 токенов/мин, 200 000/день. Точные лимиты — в console.groq.com/settings/limits.',
+      'Бесплатный уровень (октябрь 2026): gpt-oss-120b, gpt-oss-20b и qwen3.8-27b — 30 запросов/мин, 1 000/день, 8 000 токенов/мин, 200 000 токенов/день. ' +
+      'Из-за лимита токенов в минуту пачка ограничена 5 предложениями, а между пачками бывают паузы по 20–30 с. ' +
+      'Модели Llama 3.x из каталога убраны. Точные лимиты и список моделей — в console.groq.com/settings/limits.',
   },
   {
     id: 'openrouter',
@@ -120,7 +121,7 @@ async function postJson(url, headers, body, signal) {
   return res.json();
 }
 
-async function callOpenAICompatible({ baseUrl, key, model, extraHeaders = {}, jsonMode = false }, system, user, signal) {
+async function callOpenAICompatible({ baseUrl, key, model, extraHeaders = {}, extraBody = {}, jsonMode = false }, system, user, signal) {
   const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const headers = { ...extraHeaders };
   if (key) headers.Authorization = `Bearer ${key}`;
@@ -131,6 +132,7 @@ async function callOpenAICompatible({ baseUrl, key, model, extraHeaders = {}, js
       { role: 'user', content: user },
     ],
     temperature: 0.2,
+    ...extraBody,
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
   const j = await postJson(url, headers, body, signal);
@@ -179,7 +181,7 @@ async function callClaude({ key, model }, system, user, signal) {
 
 // ---- Сборка провайдера ------------------------------------------------------
 
-function llmProvider(id, cacheName, call) {
+function llmProvider(id, cacheName, call, { maxBatch } = {}) {
   const glossBatch = async (texts, { signal } = {}) => {
     const raw = await call(SYSTEM_PROMPT, buildUserMessage(texts), signal);
     return extractSentences(parseJsonResponse(raw), texts.length);
@@ -188,6 +190,7 @@ function llmProvider(id, cacheName, call) {
     id,
     name: cacheName,
     cacheable: true,
+    maxBatch, // верхняя граница пачки для провайдеров с маленьким лимитом токенов в минуту
     glossBatch,
     glossSentence: async (text, opts) => (await glossBatch([text], opts))[0],
   };
@@ -222,7 +225,15 @@ export function createProvider(settings) {
       return llmProvider(id, 'gemini', (s, u, sig) => callGemini({ key, model }, s, u, sig));
     case 'groq':
       return llmProvider(id, 'groq', (s, u, sig) =>
-        callOpenAICompatible({ baseUrl: 'https://api.groq.com/openai/v1', key, model, jsonMode: true }, s, u, sig));
+        callOpenAICompatible(
+          {
+            baseUrl: 'https://api.groq.com/openai/v1', key, model, jsonMode: true,
+            // gpt-oss — рассуждающие модели; для глоссирования хватает low, это быстрее и дешевле по токенам.
+            extraBody: /gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {},
+          },
+          s, u, sig),
+        // Бесплатный Groq: 8 000 токенов/мин. Пачка из 5 предложений — около 3 500 токенов.
+        { maxBatch: 5 });
     case 'openrouter':
       return llmProvider(id, 'openrouter', (s, u, sig) =>
         callOpenAICompatible(

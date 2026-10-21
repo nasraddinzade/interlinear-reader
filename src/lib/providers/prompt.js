@@ -69,11 +69,15 @@ function normalizeGloss(g) {
   };
 }
 
-/** Из распарсенного JSON достаёт массив из n глосс. */
+/**
+ * Из распарсенного JSON достаёт массив глосс. Количество может не совпадать с n:
+ * модели иногда пропускают предложения, поэтому сопоставление с входом делается
+ * по выравниванию токенов (см. matchResults в translate.js), а не по позиции.
+ */
 export function extractSentences(json, n) {
   let arr = Array.isArray(json) ? json : json?.sentences;
   if (!arr && json?.tokens && n === 1) arr = [json];
   if (!Array.isArray(arr)) throw new Error('В ответе нет массива "sentences"');
-  if (arr.length !== n) throw new Error(`Ожидалось ${n} предложений, модель вернула ${arr.length}`);
+  if (arr.length === 0) throw new Error('Модель вернула пустой список предложений');
   return arr.map(normalizeGloss);
 }
