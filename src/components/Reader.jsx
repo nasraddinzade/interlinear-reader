@@ -46,12 +46,7 @@ export default function Reader({ id }) {
   const runRef = useRef(null);
   const hintMode = settings.hintMode || 'visible';
 
-  const providerSig = [
-    settings.provider,
-    settings.models?.[settings.provider] || '',
-    settings.customBaseUrl || '',
-    settings.keys?.[settings.provider] || '',
-  ].join('|');
+  const providerSig = [settings.provider, settings.keys?.[settings.provider] || '', settings.googleEndpoint || ''].join('|');
 
   useEffect(() => {
     let alive = true;

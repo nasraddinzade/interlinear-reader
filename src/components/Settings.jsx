@@ -18,8 +18,6 @@ export default function Settings() {
   useEffect(() => { idb.count('cache').then(setCacheCount); }, [test]);
 
   const setKey = (v) => updateSettings((st) => ({ ...st, keys: { ...st.keys, [info.id]: v } }));
-  const setModel = (v) => updateSettings((st) => ({ ...st, models: { ...st.models, [info.id]: v } }));
-  const model = s.models?.[info.id] ?? info.defaultModel ?? '';
 
   const runTest = async () => {
     setTest({ busy: true });
@@ -35,7 +33,7 @@ export default function Settings() {
   };
 
   const clearCache = async () => {
-    if (!window.confirm('Удалить все закэшированные переводы? Тексты придётся переводить заново (это стоит запросов к API).')) return;
+    if (!window.confirm('Удалить все закэшированные переводы? Тексты придётся переводить заново (это расходует квоту API).')) return;
     await idb.clear('cache');
     setCacheCount(0);
   };
@@ -53,9 +51,14 @@ export default function Settings() {
           </select>
         </label>
         <p className="muted small">{info.note}</p>
+        {info.steps && (
+          <ol className="muted small steps">
+            {info.steps.map((st, i) => <li key={i}>{st}</li>)}
+          </ol>
+        )}
         {info.needsKey && (
           <label>
-            API-ключ {info.keyUrl && <a href={info.keyUrl} target="_blank" rel="noreferrer">(получить)</a>}
+            API-ключ {info.keyUrl && <a href={info.keyUrl} target="_blank" rel="noreferrer">(консоль Google Cloud)</a>}
             <span className="key-row">
               <input
                 type={showKey ? 'text' : 'password'}
@@ -69,27 +72,6 @@ export default function Settings() {
             </span>
           </label>
         )}
-        {info.id === 'custom' && (
-          <>
-            <label>
-              Базовый URL
-              <input value={s.customBaseUrl || ''} onChange={(e) => updateSettings({ customBaseUrl: e.target.value })} placeholder="http://localhost:11434/v1" />
-            </label>
-            <label>
-              API-ключ (если нужен)
-              <input type="password" value={s.keys?.custom || ''} onChange={(e) => setKey(e.target.value.trim())} autoComplete="off" />
-            </label>
-          </>
-        )}
-        {info.id !== 'stub' && (
-          <label>
-            Модель
-            <input list="model-list" value={model} onChange={(e) => setModel(e.target.value)} spellCheck={false} />
-            <datalist id="model-list">
-              {(info.models || []).map((m) => <option key={m} value={m} />)}
-            </datalist>
-          </label>
-        )}
         <label>
           Размер пачки (предложений в одном запросе)
           <input type="number" min={1} max={50} value={s.batchSize} onChange={(e) => updateSettings({ batchSize: Math.max(1, Math.min(50, Number(e.target.value) || 10)) })} />
@@ -99,7 +81,7 @@ export default function Settings() {
           {test && !test.busy && (
             test.ok ? (
               <span className={test.aligned ? 'ok-text' : 'warn-text'}>
-                OK за {test.ms} мс{test.aligned ? ', разбивка совпала' : `, разбивка НЕ совпала (${test.reason})`}
+                OK за {test.ms} мс{test.aligned ? '' : ` (разбивка не совпала: ${test.reason})`}
               </span>
             ) : (
               <span className="error">{test.error}</span>

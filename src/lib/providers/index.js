@@ -1,9 +1,10 @@
 // Адаптер движка перевода. Один интерфейс:
 //   provider.glossSentence(text)            -> { full, tokens }
 //   provider.glossBatch(texts, { signal })  -> [{ full, tokens }, ...]
-// Провайдер выбирается в настройках; ключи хранятся только в localStorage.
+// Провайдер выбирается в настройках; ключ хранится только в localStorage.
 
-import { SYSTEM_PROMPT, buildUserMessage, parseJsonResponse, extractSentences } from './prompt.js';
+import { analyze } from '../gloss-local.js';
+import { idb } from '../db.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 0, retryAfter = null, body = null } = {}) {
@@ -18,76 +19,32 @@ export class ApiError extends Error {
 export function isRetryable(err) {
   if (!err) return false;
   if (err.name === 'AbortError') return false;
-  if (err.reduceBatch) return false; // повтор тем же запросом бесполезен, пачку делит конвейер
   if (err instanceof ApiError) return err.status === 0 || err.status === 408 || err.status === 409 || err.status === 429 || err.status >= 500;
   if (err instanceof TypeError) return true; // сетевая ошибка fetch
-  if (err instanceof SyntaxError) return true; // модель вернула битый JSON — пробуем ещё раз
-  return /JSON|sentences|Ожидалось|не объект/.test(err.message || '');
+  return false;
 }
 
 export const PROVIDERS = [
   {
+    id: 'google',
+    name: 'Google Translate (Cloud Translation API)',
+    needsKey: true,
+    keyUrl: 'https://console.cloud.google.com/apis/credentials',
+    note:
+      'Официальный Cloud Translation API. Бесплатно 500 000 символов в месяц, дальше 20 $ за миллион; ' +
+      'для активации нужен проект Google Cloud с привязанным платёжным аккаунтом (списаний в пределах бесплатной квоты нет). ' +
+      'Предложение переводится целиком, слова — по отдельности; леммы и части речи считаются локально.',
+    steps: [
+      'Откройте console.cloud.google.com, создайте проект и включите в нём «Cloud Translation API» (APIs & Services → Library).',
+      'В «APIs & Services → Credentials» нажмите «Create credentials → API key» и скопируйте ключ.',
+      'Ограничьте ключ: Application restrictions → Websites → ваш домен (например, https://interlinear-reader.vercel.app/*), API restrictions → Cloud Translation API.',
+    ],
+  },
+  {
     id: 'stub',
     name: 'Без перевода (офлайн-заглушка)',
     needsKey: false,
-    note: 'Текст показывается как есть, переводы пустые. Нужно, чтобы приложение работало без ключа.',
-  },
-  {
-    id: 'gemini',
-    name: 'Google Gemini',
-    needsKey: true,
-    keyUrl: 'https://aistudio.google.com/apikey',
-    defaultModel: 'gemini-2.5-flash',
-    models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-3-flash-preview'],
-    note:
-      'Бесплатный уровень есть у моделей Flash / Flash-Lite (2.5 и 3.x). Google не публикует фиксированные цифры: ' +
-      'актуальные RPM/RPD для вашего проекта видны в AI Studio. По данным на октябрь 2026 у 2.5 Flash порядка 10 запросов в минуту и несколько сотен в день.',
-  },
-  {
-    id: 'groq',
-    name: 'Groq',
-    needsKey: true,
-    keyUrl: 'https://console.groq.com/keys',
-    defaultModel: 'openai/gpt-oss-120b',
-    models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'],
-    note:
-      'Бесплатный уровень (октябрь 2026): gpt-oss-120b, gpt-oss-20b и qwen3.8-27b — 30 запросов/мин, 1 000/день, 8 000 токенов/мин, 200 000 токенов/день. ' +
-      'Ответ режется по длине (3 072 токена у gpt-oss, 2 048 у qwen), поэтому пачка ограничена 5 предложениями, недостающее дозапрашивается; ' +
-      'из-за лимита токенов в минуту между пачками бывают паузы по 20–30 с. ' +
-      'Модели Llama 3.x из каталога убраны. Точные лимиты и список моделей — в console.groq.com/settings/limits.',
-  },
-  {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    needsKey: true,
-    keyUrl: 'https://openrouter.ai/settings/keys',
-    defaultModel: 'google/gemma-4-31b-it:free',
-    models: ['google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-3-super-120b-a12b:free', 'minimax/minimax-m3.1-flash:free'],
-    note:
-      'Модели с суффиксом :free бесплатны: 20 запросов/мин и 50 запросов/день, пока на счёт не куплено 10 $ кредитов (тогда 1 000/день). ' +
-      'Неудачные запросы тоже считаются. Список :free-моделей меняется, см. openrouter.ai/models?q=free.',
-  },
-  {
-    id: 'claude',
-    name: 'Claude API (Anthropic)',
-    needsKey: true,
-    keyUrl: 'https://platform.claude.com/settings/keys',
-    defaultModel: 'claude-opus-5-5',
-    models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
-    note:
-      'Бесплатного уровня нет, оплата за токены. Ориентир (октябрь 2026): Opus 5.5 — 4 $/20 $ за 1M входных/выходных токенов, ' +
-      'Sonnet 5.5 — 2 $/10 $, Haiku 5.5 — 0,10 $/0,50 $. Качество глосс у Opus и Sonnet заметно выше.',
-  },
-  {
-    id: 'custom',
-    name: 'OpenAI-совместимый сервер (Ollama, LM Studio, свой URL)',
-    needsKey: false,
-    defaultModel: 'llama3.1',
-    defaultBaseUrl: 'http://localhost:11434/v1',
-    models: ['llama3.1', 'qwen2.5:14b', 'gemma3:12b'],
-    note:
-      'Любой сервер с эндпоинтом POST {baseUrl}/chat/completions. Для Ollama запустите «ollama serve» с переменной OLLAMA_ORIGINS=* ' +
-      'и укажите http://localhost:11434/v1. Полностью офлайн и бесплатно, качество зависит от модели.',
+    note: 'Текст показывается как есть, переводы пустые; леммы и части речи всё равно считаются локально.',
   },
 ];
 
@@ -109,8 +66,6 @@ async function readError(res) {
   return new ApiError(message, { status: res.status, retryAfter, body });
 }
 
-// ---- HTTP-клиенты -----------------------------------------------------------
-
 async function postJson(url, headers, body, signal) {
   let res;
   try {
@@ -123,112 +78,105 @@ async function postJson(url, headers, body, signal) {
   return res.json();
 }
 
-async function callOpenAICompatible({ baseUrl, key, model, extraHeaders = {}, extraBody = {}, jsonMode = false }, system, user, signal) {
-  const url = baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const headers = { ...extraHeaders };
-  if (key) headers.Authorization = `Bearer ${key}`;
-  const body = {
-    model,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    temperature: 0.2,
-    ...extraBody,
-  };
-  if (jsonMode) body.response_format = { type: 'json_object' };
-  let j;
-  try {
-    j = await postJson(url, headers, body, signal);
-  } catch (e) {
-    // Groq в JSON-режиме отвечает 400 "Failed to validate JSON", если модель выдала битый JSON
-    // (чаще всего — обрезанный по лимиту вывода). Сырой текст лежит в error.failed_generation:
-    // пробуем разобрать его сами, иначе помечаем ошибку как «пачку надо уменьшить».
-    if (e instanceof ApiError && e.status === 400 && /validate JSON|failed_generation/i.test(e.message + (e.body || ''))) {
-      let failed = '';
-      try { failed = JSON.parse(e.body)?.error?.failed_generation || ''; } catch { /* ignore */ }
-      if (failed) {
-        try { parseJsonResponse(failed); return failed; } catch { /* не спаслось */ }
-      }
-      e.message = 'Модель вернула невалидный JSON (скорее всего, ответ обрезан по длине)';
-      e.reduceBatch = true;
-    }
-    throw e;
+// ---- Google Cloud Translation API v2 ----------------------------------------
+
+const GOOGLE_ENDPOINT = 'https://translation.googleapis.com/language/translate/v2';
+const MAX_SEGMENTS = 100; // лимит API — 128 сегментов на запрос
+const MAX_CHARS = 20000;
+
+function chunkSegments(items) {
+  const out = [];
+  let cur = [];
+  let chars = 0;
+  for (const s of items) {
+    if (cur.length >= MAX_SEGMENTS || chars + s.length > MAX_CHARS) { out.push(cur); cur = []; chars = 0; }
+    cur.push(s);
+    chars += s.length;
   }
-  const choice = j?.choices?.[0];
-  const text = choice?.message?.content;
-  if (typeof text !== 'string') throw new ApiError('Пустой ответ модели', { status: 0 });
-  if (choice.finish_reason === 'length') {
-    // Ответ обрезан. Groq в JSON-режиме закрывает скобки сам — тогда берём, что влезло,
-    // а недостающие предложения конвейер запросит отдельно. Иначе пачку надо уменьшить.
-    try { parseJsonResponse(text); } catch {
-      const err = new ApiError('Ответ модели обрезан по длине', { status: 0 });
-      err.reduceBatch = true;
-      throw err;
-    }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+/** Переводит массив строк en→ru, сохраняя порядок. */
+async function googleTranslate(texts, { key, endpoint, signal }) {
+  const result = [];
+  for (const part of chunkSegments(texts)) {
+    const j = await postJson(
+      `${endpoint}?key=${encodeURIComponent(key)}`,
+      {},
+      { q: part, source: 'en', target: 'ru', format: 'text' },
+      signal,
+    );
+    const tr = j?.data?.translations;
+    if (!Array.isArray(tr) || tr.length !== part.length) throw new ApiError('Неожиданный ответ Google Translate', { status: 0 });
+    result.push(...tr.map((t) => String(t.translatedText ?? '')));
   }
-  return text;
+  return result;
 }
 
-async function callGemini({ key, model }, system, user, signal) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: [{ text: user }] }],
-    generationConfig: { temperature: 0.2, responseMimeType: 'application/json' },
-  };
-  const j = await postJson(url, { 'x-goog-api-key': key }, body, signal);
-  const cand = j?.candidates?.[0];
-  const text = cand?.content?.parts?.map((p) => p.text || '').join('');
-  if (!text) throw new ApiError('Пустой ответ Gemini' + (cand?.finishReason ? ` (${cand.finishReason})` : ''), { status: 0 });
-  return text;
+// Переводы отдельных слов запоминаем между запросами и сессиями (store "cache", ключ google-word:…),
+// чтобы не тратить квоту на одни и те же слова.
+const wordMemo = new Map();
+
+async function translateWords(words, opts) {
+  const need = [];
+  const keys = words.map((w) => `google-word:${w}`);
+  const rows = await idb.getMany('cache', keys).catch(() => []);
+  words.forEach((w, i) => {
+    if (wordMemo.has(w)) return;
+    if (rows[i]?.ru !== undefined) wordMemo.set(w, rows[i].ru);
+    else need.push(w);
+  });
+  if (need.length) {
+    const ru = await googleTranslate(need, opts);
+    const toStore = [];
+    need.forEach((w, i) => { wordMemo.set(w, ru[i]); toStore.push({ key: `google-word:${w}`, ru: ru[i], at: Date.now() }); });
+    await idb.putMany('cache', toStore).catch(() => {});
+  }
+  return (w) => wordMemo.get(w) ?? '';
 }
 
-async function callClaude({ key, model }, system, user, signal) {
-  const body = {
-    model,
-    max_tokens: 16000,
-    system,
-    messages: [{ role: 'user', content: user }],
-    output_config: { effort: 'low' },
-  };
-  const j = await postJson(
-    'https://api.anthropic.com/v1/messages',
-    {
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body,
-    signal,
-  );
-  if (j?.stop_reason === 'refusal') throw new ApiError('Модель отказалась отвечать (refusal)', { status: 0 });
-  const text = (j?.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
-  if (!text) throw new ApiError('Пустой ответ Claude', { status: 0 });
-  return text;
-}
+const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
-// ---- Сборка провайдера ------------------------------------------------------
-
-function llmProvider(id, cacheName, call, { maxBatch } = {}) {
+function googleProvider({ key, endpoint }) {
   const glossBatch = async (texts, { signal } = {}) => {
-    const raw = await call(SYSTEM_PROMPT, buildUserMessage(texts), signal);
-    return extractSentences(parseJsonResponse(raw), texts.length);
+    const opts = { key, endpoint, signal };
+    const analyses = texts.map(analyze);
+    const fulls = await googleTranslate(texts, opts);
+    const lookups = [...new Set(analyses.flat().flatMap((t) => t.lookups))];
+    const ru = await translateWords(lookups, opts);
+    return analyses.map((tokens, i) => ({
+      full: fulls[i],
+      tokens: tokens.map((t) => {
+        let ctx;
+        let base;
+        if (t.rule) {
+          ({ ctx, base } = t.rule);
+        } else if (t.isName) {
+          ctx = ru(t.word) || t.word;
+          base = ctx;
+        } else {
+          ctx = lowerFirst(ru(t.lower));
+          const lemmaRu = t.lemma.toLowerCase() !== t.lower ? lowerFirst(ru(t.lemma.toLowerCase())) : '';
+          base = lemmaRu && lemmaRu !== ctx ? lemmaRu : ctx;
+        }
+        return { en: t.en, gap: t.gap, ctx, lemma: t.lemma, base, pos: t.pos };
+      }),
+    }));
   };
   return {
-    id,
-    name: cacheName,
+    id: 'google',
+    name: 'google',
     cacheable: true,
-    maxBatch, // верхняя граница пачки для провайдеров с маленьким лимитом токенов в минуту
     glossBatch,
-    glossSentence: async (text, opts) => (await glossBatch([text], opts))[0],
+    glossSentence: async (text, o) => (await glossBatch([text], o))[0],
   };
 }
 
 export function stubProvider() {
   const gloss = (text) => ({
     full: '',
-    tokens: text.split(/(\s+)/).filter((s) => s && !/^\s+$/.test(s)).map((w) => ({ en: w, ctx: '', lemma: '', base: '', pos: '' })),
+    tokens: analyze(text).map((t) => ({ en: t.en, gap: t.gap, ctx: t.rule?.ctx || '', lemma: t.lemma, base: t.rule?.base || '', pos: t.pos })),
   });
   return {
     id: 'stub',
@@ -241,40 +189,10 @@ export function stubProvider() {
 
 /** Создаёт провайдер по настройкам приложения. */
 export function createProvider(settings) {
-  const id = settings.provider || 'stub';
+  const id = settings.provider || 'google';
   const info = providerInfo(id);
   const key = (settings.keys?.[id] || '').trim();
-  const model = (settings.models?.[id] || info.defaultModel || '').trim();
-
   if (id === 'stub') return stubProvider();
   if (info.needsKey && !key) throw new ApiError(`Для провайдера «${info.name}» не задан API-ключ. Откройте Настройки.`, { status: 401 });
-
-  switch (id) {
-    case 'gemini':
-      return llmProvider(id, 'gemini', (s, u, sig) => callGemini({ key, model }, s, u, sig));
-    case 'groq':
-      return llmProvider(id, 'groq', (s, u, sig) =>
-        callOpenAICompatible(
-          {
-            baseUrl: 'https://api.groq.com/openai/v1', key, model, jsonMode: true,
-            // gpt-oss — рассуждающие модели; для глоссирования хватает low, это быстрее и дешевле по токенам.
-            extraBody: /gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {},
-          },
-          s, u, sig),
-        // Бесплатный Groq: 8 000 токенов/мин. Пачка из 5 предложений — около 3 500 токенов.
-        { maxBatch: 5 });
-    case 'openrouter':
-      return llmProvider(id, 'openrouter', (s, u, sig) =>
-        callOpenAICompatible(
-          { baseUrl: 'https://openrouter.ai/api/v1', key, model, extraHeaders: { 'HTTP-Referer': 'https://github.com/nasraddinzade/interlinear-reader', 'X-Title': 'Interlinear Reader' } },
-          s, u, sig));
-    case 'claude':
-      return llmProvider(id, 'claude', (s, u, sig) => callClaude({ key, model }, s, u, sig));
-    case 'custom': {
-      const baseUrl = (settings.customBaseUrl || info.defaultBaseUrl).trim();
-      return llmProvider(id, `custom:${model}`, (s, u, sig) => callOpenAICompatible({ baseUrl, key, model }, s, u, sig));
-    }
-    default:
-      return stubProvider();
-  }
+  return googleProvider({ key, endpoint: settings.googleEndpoint || GOOGLE_ENDPOINT });
 }

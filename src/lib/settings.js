@@ -12,10 +12,8 @@ export const HINT_MODE_LABELS = {
 };
 
 const DEFAULTS = {
-  provider: 'stub',
+  provider: 'google',
   keys: {},
-  models: {},
-  customBaseUrl: 'http://localhost:11434/v1',
   voiceURI: '',
   rate: 1,
   batchSize: 10,
@@ -27,7 +25,9 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw);
-    return { ...DEFAULTS, ...parsed, keys: { ...(parsed.keys || {}) }, models: { ...(parsed.models || {}) } };
+    const s = { ...DEFAULTS, ...parsed, keys: { ...(parsed.keys || {}) } };
+    if (!['google', 'stub'].includes(s.provider)) s.provider = 'google'; // старые настройки с ИИ-провайдерами
+    return s;
   } catch {
     return { ...DEFAULTS };
   }
