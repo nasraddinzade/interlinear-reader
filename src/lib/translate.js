@@ -94,8 +94,11 @@ function errorMessage(e) {
  */
 export async function glossMissing({ sentences, indexes, provider, batchSize = 10, onResult, onStatus, signal }) {
   const size = Math.max(1, Math.min(batchSize, provider.maxBatch || Infinity));
-  for (const batch of chunk(indexes, size)) {
+  const queue = chunk(indexes, size);
+  const attempts = new Map();
+  while (queue.length) {
     if (signal?.aborted) return;
+    const batch = queue.shift();
     const texts = batch.map((i) => sentences[i]);
     let results;
     try {
@@ -107,14 +110,31 @@ export async function glossMissing({ sentences, indexes, provider, batchSize = 1
       onStatus?.('');
     } catch (e) {
       if (signal?.aborted) return;
+      if (e?.reduceBatch && batch.length > 1) {
+        // Ответ не влез или сломался — делим пачку пополам и пробуем снова.
+        const half = Math.ceil(batch.length / 2);
+        queue.unshift(batch.slice(0, half), batch.slice(half));
+        onStatus?.(`${errorMessage(e)}. Делю пачку: ${half} + ${batch.length - half}…`);
+        continue;
+      }
       onStatus?.('');
       batch.forEach((i) => onResult(i, { error: errorMessage(e) }));
       continue;
     }
 
+    // Пропущенные моделью предложения (ответ обрезан или модель их потеряла) собираем
+    // в новую пачку, а не дёргаем по одному. После двух неудач пачкой — запрос по одному.
+    const missing = batch.filter((i, k) => !results[k]);
+    if (missing.length > 1 && batch.length > 1 && missing.every((i) => (attempts.get(i) || 0) < 2)) {
+      missing.forEach((i) => attempts.set(i, (attempts.get(i) || 0) + 1));
+      onStatus?.(`Модель вернула ${batch.length - missing.length} из ${batch.length}, недостающие ${missing.length} — новой пачкой…`);
+      queue.unshift(missing);
+    }
+
     for (let k = 0; k < batch.length; k++) {
       const i = batch[k];
       const sentence = sentences[i];
+      if (!results[k] && queue[0] === missing) continue; // уйдёт следующей пачкой
       let gloss = results[k] ? finalize(sentence, results[k]) : null;
       if (!gloss || !gloss.aligned) {
         // Предложение пропущено или правило 1 нарушено — повторяем запрос для него одного.

@@ -45,7 +45,7 @@ export function buildUserMessage(sentences) {
 
 /** Вытаскивает JSON из ответа модели, терпимо к ```json``` и тексту вокруг. */
 export function parseJsonResponse(text) {
-  let s = String(text ?? '').trim();
+  let s = String(text ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fence) s = fence[1].trim();
   const first = s.indexOf('{');

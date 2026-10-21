@@ -18,6 +18,7 @@ export class ApiError extends Error {
 export function isRetryable(err) {
   if (!err) return false;
   if (err.name === 'AbortError') return false;
+  if (err.reduceBatch) return false; // повтор тем же запросом бесполезен, пачку делит конвейер
   if (err instanceof ApiError) return err.status === 0 || err.status === 408 || err.status === 409 || err.status === 429 || err.status >= 500;
   if (err instanceof TypeError) return true; // сетевая ошибка fetch
   if (err instanceof SyntaxError) return true; // модель вернула битый JSON — пробуем ещё раз
@@ -51,7 +52,8 @@ export const PROVIDERS = [
     models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'],
     note:
       'Бесплатный уровень (октябрь 2026): gpt-oss-120b, gpt-oss-20b и qwen3.8-27b — 30 запросов/мин, 1 000/день, 8 000 токенов/мин, 200 000 токенов/день. ' +
-      'Из-за лимита токенов в минуту пачка ограничена 5 предложениями, а между пачками бывают паузы по 20–30 с. ' +
+      'Ответ режется по длине (3 072 токена у gpt-oss, 2 048 у qwen), поэтому пачка ограничена 5 предложениями, недостающее дозапрашивается; ' +
+      'из-за лимита токенов в минуту между пачками бывают паузы по 20–30 с. ' +
       'Модели Llama 3.x из каталога убраны. Точные лимиты и список моделей — в console.groq.com/settings/limits.',
   },
   {
@@ -135,9 +137,36 @@ async function callOpenAICompatible({ baseUrl, key, model, extraHeaders = {}, ex
     ...extraBody,
   };
   if (jsonMode) body.response_format = { type: 'json_object' };
-  const j = await postJson(url, headers, body, signal);
-  const text = j?.choices?.[0]?.message?.content;
+  let j;
+  try {
+    j = await postJson(url, headers, body, signal);
+  } catch (e) {
+    // Groq в JSON-режиме отвечает 400 "Failed to validate JSON", если модель выдала битый JSON
+    // (чаще всего — обрезанный по лимиту вывода). Сырой текст лежит в error.failed_generation:
+    // пробуем разобрать его сами, иначе помечаем ошибку как «пачку надо уменьшить».
+    if (e instanceof ApiError && e.status === 400 && /validate JSON|failed_generation/i.test(e.message + (e.body || ''))) {
+      let failed = '';
+      try { failed = JSON.parse(e.body)?.error?.failed_generation || ''; } catch { /* ignore */ }
+      if (failed) {
+        try { parseJsonResponse(failed); return failed; } catch { /* не спаслось */ }
+      }
+      e.message = 'Модель вернула невалидный JSON (скорее всего, ответ обрезан по длине)';
+      e.reduceBatch = true;
+    }
+    throw e;
+  }
+  const choice = j?.choices?.[0];
+  const text = choice?.message?.content;
   if (typeof text !== 'string') throw new ApiError('Пустой ответ модели', { status: 0 });
+  if (choice.finish_reason === 'length') {
+    // Ответ обрезан. Groq в JSON-режиме закрывает скобки сам — тогда берём, что влезло,
+    // а недостающие предложения конвейер запросит отдельно. Иначе пачку надо уменьшить.
+    try { parseJsonResponse(text); } catch {
+      const err = new ApiError('Ответ модели обрезан по длине', { status: 0 });
+      err.reduceBatch = true;
+      throw err;
+    }
+  }
   return text;
 }
 
