@@ -6,6 +6,7 @@ import { useSettings, updateSettings, HINT_MODES, HINT_MODE_LABELS, getSettings 
 import { speak, useSpeakingId } from '../lib/tts.js';
 import { useWords, savedKeySet, isTokenSaved } from '../lib/words.js';
 import WordCard from './WordCard.jsx';
+import { getChromeTranslator, onChromeDownloadProgress } from '../lib/providers/chrome.js';
 
 const cleanForSpeech = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
@@ -38,6 +39,9 @@ export default function Reader({ id }) {
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState('');
   const [fatal, setFatal] = useState('');
+  const [needsDownload, setNeedsDownload] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null);
+  const [runKey, setRunKey] = useState(0);
   const [card, setCard] = useState(null);
   const [tapped, setTapped] = useState(null);
   const speakingId = useSpeakingId();
@@ -60,7 +64,24 @@ export default function Reader({ id }) {
       next[i] = r.gloss ? { status: 'done', gloss: r.gloss } : { status: 'error', error: r.error };
       return next;
     });
+    // Встроенный переводчик ещё не скачал языковой пакет — нужен клик пользователя.
+    if (r.error && /языковой пакет/i.test(r.error)) setNeedsDownload(true);
   }, []);
+
+  useEffect(() => onChromeDownloadProgress((p) => setDownloadProgress(p)), []);
+
+  const downloadPack = async () => {
+    setDownloadProgress(0);
+    try {
+      await getChromeTranslator();
+      setNeedsDownload(false);
+      setRunKey((k) => k + 1); // перезапускаем перевод
+    } catch (e) {
+      setFatal(e.message);
+    } finally {
+      setDownloadProgress(null);
+    }
+  };
 
   // Перевод: сначала кэш, потом пачками только то, чего нет.
   useEffect(() => {
@@ -68,6 +89,7 @@ export default function Reader({ id }) {
     const ctrl = new AbortController();
     setFatal('');
     setStatus('');
+    setNeedsDownload(false);
     let provider;
     try {
       provider = createProvider(getSettings());
@@ -95,7 +117,7 @@ export default function Reader({ id }) {
       });
     })().catch((e) => { if (!ctrl.signal.aborted) setFatal(e.message); });
     return () => ctrl.abort();
-  }, [text, providerSig, settings.batchSize, applyResult]);
+  }, [text, providerSig, settings.batchSize, applyResult, runKey]);
 
   const retryRow = (i) => {
     const run = runRef.current;
@@ -169,6 +191,14 @@ export default function Reader({ id }) {
         </button>
       </div>
       {fatal && <p className="notice warn">{fatal} <a href="#/settings">Настройки</a></p>}
+      {needsDownload && (
+        <p className="notice">
+          Встроенному переводчику нужен языковой пакет en→ru (скачивается один раз).{' '}
+          <button className="primary small" onClick={downloadPack} disabled={downloadProgress !== null}>
+            {downloadProgress !== null ? `Скачивается… ${Math.round(downloadProgress * 100)}%` : 'Загрузить языковой пакет'}
+          </button>
+        </p>
+      )}
 
       <div className="rows">
         {text.sentences.map((sentence, i) => {

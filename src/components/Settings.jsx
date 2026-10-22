@@ -4,8 +4,56 @@ import { PROVIDERS, providerInfo, createProvider } from '../lib/providers/index.
 import { speak, useEnglishVoices, ttsSupported } from '../lib/tts.js';
 import { idb } from '../lib/db.js';
 import { alignTokens } from '../lib/align.js';
+import { chromeAvailability, getChromeTranslator, onChromeDownloadProgress } from '../lib/providers/chrome.js';
 
 const TEST_SENTENCE = "I'll get back to you on that.";
+
+const CHROME_STATUS = {
+  checking: 'Проверяю…',
+  available: 'Готов: языковой пакет en→ru установлен.',
+  downloadable: 'Языковой пакет en→ru ещё не скачан.',
+  downloading: 'Языковой пакет скачивается…',
+  unavailable: 'Пара en→ru недоступна в этом браузере. Выберите Google Translate.',
+  unsupported: 'В этом браузере нет встроенного переводчика (нужен Chrome 138+ или Edge). Выберите Google Translate.',
+};
+
+function ChromeStatus() {
+  const [status, setStatus] = useState('checking');
+  const [progress, setProgress] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => { chromeAvailability().then(setStatus); }, []);
+  useEffect(() => onChromeDownloadProgress((p) => setProgress(p)), []);
+
+  const download = async () => {
+    setError('');
+    setStatus('downloading');
+    setProgress(0);
+    try {
+      await getChromeTranslator();
+      setStatus('available');
+    } catch (e) {
+      setError(e.message);
+      setStatus(await chromeAvailability());
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  return (
+    <div className="chrome-status">
+      <p className={status === 'available' ? 'ok-text' : status === 'unavailable' || status === 'unsupported' ? 'error' : 'muted'}>
+        {CHROME_STATUS[status] || status}
+        {progress !== null && ` ${Math.round(progress * 100)}%`}
+      </p>
+      {(status === 'downloadable' || status === 'downloading') && (
+        <button className="primary" onClick={download} disabled={status === 'downloading'}>
+          {status === 'downloading' ? 'Скачивается…' : 'Загрузить языковой пакет'}
+        </button>
+      )}
+      {error && <p className="error small">{error}</p>}
+    </div>
+  );
+}
 
 export default function Settings() {
   const s = useSettings();
@@ -33,7 +81,7 @@ export default function Settings() {
   };
 
   const clearCache = async () => {
-    if (!window.confirm('Удалить все закэшированные переводы? Тексты придётся переводить заново (это расходует квоту API).')) return;
+    if (!window.confirm('Удалить все закэшированные переводы? Тексты придётся переводить заново.')) return;
     await idb.clear('cache');
     setCacheCount(0);
   };
@@ -56,6 +104,7 @@ export default function Settings() {
             {info.steps.map((st, i) => <li key={i}>{st}</li>)}
           </ol>
         )}
+        {info.id === 'chrome' && <ChromeStatus />}
         {info.needsKey && (
           <label>
             API-ключ {info.keyUrl && <a href={info.keyUrl} target="_blank" rel="noreferrer">(консоль Google Cloud)</a>}

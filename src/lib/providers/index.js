@@ -1,10 +1,11 @@
 // Адаптер движка перевода. Один интерфейс:
 //   provider.glossSentence(text)            -> { full, tokens }
 //   provider.glossBatch(texts, { signal })  -> [{ full, tokens }, ...]
-// Провайдер выбирается в настройках; ключ хранится только в localStorage.
+// Провайдер выбирается в настройках; ключ Google хранится только в localStorage.
 
 import { analyze } from '../gloss-local.js';
 import { idb } from '../db.js';
+import { chromeTranslate, chromeSupported } from './chrome.js';
 
 export class ApiError extends Error {
   constructor(message, { status = 0, retryAfter = null, body = null } = {}) {
@@ -19,6 +20,7 @@ export class ApiError extends Error {
 export function isRetryable(err) {
   if (!err) return false;
   if (err.name === 'AbortError') return false;
+  if (err.name === 'ChromeTranslatorError') return false;
   if (err instanceof ApiError) return err.status === 0 || err.status === 408 || err.status === 409 || err.status === 429 || err.status >= 500;
   if (err instanceof TypeError) return true; // сетевая ошибка fetch
   return false;
@@ -26,14 +28,21 @@ export function isRetryable(err) {
 
 export const PROVIDERS = [
   {
+    id: 'chrome',
+    name: 'Встроенный переводчик браузера (Chrome, Edge)',
+    needsKey: false,
+    note:
+      'Translator API браузера: бесплатно, без ключа и лимитов, перевод выполняется на устройстве. ' +
+      'Языковой пакет en→ru (несколько десятков мегабайт) скачивается один раз. Работает в Chrome 138+ и Edge; в Firefox и Safari недоступен.',
+  },
+  {
     id: 'google',
     name: 'Google Translate (Cloud Translation API)',
     needsKey: true,
     keyUrl: 'https://console.cloud.google.com/apis/credentials',
     note:
-      'Официальный Cloud Translation API. Бесплатно 500 000 символов в месяц, дальше 20 $ за миллион; ' +
-      'для активации нужен проект Google Cloud с привязанным платёжным аккаунтом (списаний в пределах бесплатной квоты нет). ' +
-      'Предложение переводится целиком, слова — по отдельности; леммы и части речи считаются локально.',
+      'Официальный Cloud Translation API для браузеров без встроенного переводчика. Бесплатно 500 000 символов в месяц, дальше 20 $ за миллион; ' +
+      'для активации нужен проект Google Cloud с привязанным платёжным аккаунтом (списаний в пределах бесплатной квоты нет).',
     steps: [
       'Откройте console.cloud.google.com, создайте проект и включите в нём «Cloud Translation API» (APIs & Services → Library).',
       'В «APIs & Services → Credentials» нажмите «Create credentials → API key» и скопируйте ключ.',
@@ -114,37 +123,40 @@ async function googleTranslate(texts, { key, endpoint, signal }) {
   return result;
 }
 
-// Переводы отдельных слов запоминаем между запросами и сессиями (store "cache", ключ google-word:…),
-// чтобы не тратить квоту на одни и те же слова.
+// ---- Общее: переводы отдельных слов ------------------------------------------
+// Запоминаем между запросами и сессиями (store "cache", ключ `${prefix}-word:…`),
+// чтобы не переводить одни и те же слова повторно.
+
 const wordMemo = new Map();
 
-async function translateWords(words, opts) {
+async function translateWords(prefix, words, translate) {
   const need = [];
-  const keys = words.map((w) => `google-word:${w}`);
+  const keys = words.map((w) => `${prefix}-word:${w}`);
   const rows = await idb.getMany('cache', keys).catch(() => []);
   words.forEach((w, i) => {
-    if (wordMemo.has(w)) return;
-    if (rows[i]?.ru !== undefined) wordMemo.set(w, rows[i].ru);
+    const k = keys[i];
+    if (wordMemo.has(k)) return;
+    if (rows[i]?.ru !== undefined) wordMemo.set(k, rows[i].ru);
     else need.push(w);
   });
   if (need.length) {
-    const ru = await googleTranslate(need, opts);
+    const ru = await translate(need);
     const toStore = [];
-    need.forEach((w, i) => { wordMemo.set(w, ru[i]); toStore.push({ key: `google-word:${w}`, ru: ru[i], at: Date.now() }); });
+    need.forEach((w, i) => { wordMemo.set(`${prefix}-word:${w}`, ru[i]); toStore.push({ key: `${prefix}-word:${w}`, ru: ru[i], at: Date.now() }); });
     await idb.putMany('cache', toStore).catch(() => {});
   }
-  return (w) => wordMemo.get(w) ?? '';
+  return (w) => wordMemo.get(`${prefix}-word:${w}`) ?? '';
 }
 
 const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
-function googleProvider({ key, endpoint }) {
+/** Собирает провайдер из функции перевода массива строк. */
+function mtProvider(id, translate) {
   const glossBatch = async (texts, { signal } = {}) => {
-    const opts = { key, endpoint, signal };
     const analyses = texts.map(analyze);
-    const fulls = await googleTranslate(texts, opts);
+    const fulls = await translate(texts, signal);
     const lookups = [...new Set(analyses.flat().flatMap((t) => t.lookups))];
-    const ru = await translateWords(lookups, opts);
+    const ru = await translateWords(id, lookups, (words) => translate(words, signal));
     return analyses.map((tokens, i) => ({
       full: fulls[i],
       tokens: tokens.map((t) => {
@@ -165,8 +177,8 @@ function googleProvider({ key, endpoint }) {
     }));
   };
   return {
-    id: 'google',
-    name: 'google',
+    id,
+    name: id,
     cacheable: true,
     glossBatch,
     glossSentence: async (text, o) => (await glossBatch([text], o))[0],
@@ -189,10 +201,12 @@ export function stubProvider() {
 
 /** Создаёт провайдер по настройкам приложения. */
 export function createProvider(settings) {
-  const id = settings.provider || 'google';
+  const id = settings.provider || (chromeSupported() ? 'chrome' : 'google');
   const info = providerInfo(id);
   const key = (settings.keys?.[id] || '').trim();
   if (id === 'stub') return stubProvider();
+  if (id === 'chrome') return mtProvider('chrome', (texts, signal) => chromeTranslate(texts, { signal }));
   if (info.needsKey && !key) throw new ApiError(`Для провайдера «${info.name}» не задан API-ключ. Откройте Настройки.`, { status: 401 });
-  return googleProvider({ key, endpoint: settings.googleEndpoint || GOOGLE_ENDPOINT });
+  const endpoint = settings.googleEndpoint || GOOGLE_ENDPOINT;
+  return mtProvider('google', (texts, signal) => googleTranslate(texts, { key, endpoint, signal }));
 }
