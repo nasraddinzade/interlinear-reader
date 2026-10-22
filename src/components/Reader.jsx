@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { getText } from '../lib/texts.js';
 import { createProvider } from '../lib/providers/index.js';
-import { lookupCache, glossMissing } from '../lib/translate.js';
+import { lookupCache, glossMissing, refineGlosses } from '../lib/translate.js';
 import { useSettings, updateSettings, HINT_MODES, HINT_MODE_LABELS, getSettings, voiceFor } from '../lib/settings.js';
 import { speak, useSpeakingId } from '../lib/tts.js';
 import { useWords, savedKeySet, isTokenSaved } from '../lib/words.js';
@@ -117,16 +117,22 @@ export default function Reader({ id }) {
       if (ctrl.signal.aborted) return;
       setRows(cached.map((g) => (g ? { status: 'done', gloss: g } : { status: 'pending' })));
       const missing = cached.map((g, i) => (g ? -1 : i)).filter((i) => i >= 0);
-      if (missing.length === 0) return;
-      await glossMissing({
-        sentences: text.sentences,
-        indexes: missing,
-        provider,
-        batchSize: Number(getSettings().batchSize) || 10,
-        signal: ctrl.signal,
-        onStatus: setStatus,
-        onResult: applyResult,
-      });
+      if (missing.length) {
+        await glossMissing({
+          sentences: text.sentences,
+          indexes: missing,
+          provider,
+          batchSize: Number(getSettings().batchSize) || 10,
+          signal: ctrl.signal,
+          onStatus: setStatus,
+          onResult: applyResult,
+        });
+      }
+      // Предложения из кэша без контекстных подсказок (старый кэш или прерванный проход) дорабатываем.
+      const stale = cached.map((g, i) => (g && !g.refined ? [i, g] : null)).filter(Boolean);
+      if (stale.length && !ctrl.signal.aborted) {
+        await refineGlosses({ sentences: text.sentences, items: stale, provider, onResult: applyResult, onStatus: setStatus, signal: ctrl.signal });
+      }
     })().catch((e) => { if (!ctrl.signal.aborted) setFatal(e.message); });
     return () => ctrl.abort();
   }, [text, providerSig, settings.batchSize, applyResult, runKey]);

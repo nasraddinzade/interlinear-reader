@@ -84,7 +84,7 @@ function mtProvider(name, src, tgt, translate) {
           const lemmaRu = t.lemma.toLowerCase() !== t.lower ? lowerFirst(ru(t.lemma.toLowerCase())) : '';
           base = lemmaRu && lemmaRu !== ctx ? lemmaRu : ctx;
         }
-        return { en: t.en, gap: t.gap, ctx, lemma: t.lemma, base, pos: t.pos };
+        return { en: t.en, gap: t.gap, ctx, lemma: t.lemma, base, pos: t.pos, rule: t.rule ? true : undefined, isName: t.isName || undefined };
       }),
     }));
   };
@@ -93,6 +93,33 @@ function mtProvider(name, src, tgt, translate) {
     const ru = await translateWords(name, [text], (words) => translate(words, signal));
     return ru(text);
   };
+
+  // Контекстный перевод слов: предложение переводится ещё раз с одним словом в скобках,
+  // «¿Qué [tal]? — Bien, gracias.» → «Что [такое]? — Хорошо, спасибо.», и из скобок берётся ctx.
+  // Отдельный перевод слова остаётся в base как словарное значение.
+  const refineSentence = async (sentence, gloss, { signal } = {}) => {
+    const tokens = gloss.tokens;
+    const marked = [];
+    let pos = 0;
+    const spans = tokens.map((t) => { const start = pos + (t.gap || '').length; pos = start + t.en.length; return [start, pos]; });
+    for (let k = 0; k < tokens.length; k++) {
+      const t = tokens[k];
+      if (t.rule || !t.ctx || t.pos === 'art') continue; // правила и непереводимое не трогаем
+      const m = t.en.match(/^([^\p{L}\p{N}]*)(.*?)([^\p{L}\p{N}]*)$/su);
+      if (!m || !m[2]) continue;
+      const [start, end] = spans[k];
+      marked.push({ k, text: sentence.slice(0, start) + m[1] + '[' + m[2] + ']' + m[3] + sentence.slice(end), word: m[2] });
+    }
+    if (!marked.length) return { ...gloss, refined: true };
+    const out = await translate(marked.map((x) => x.text), signal);
+    const next = tokens.slice();
+    marked.forEach((x, i) => {
+      const ctx = extractMarked(out[i], x.word);
+      if (ctx) next[x.k] = { ...next[x.k], ctx: next[x.k].isName ? ctx : lowerFirst(ctx) };
+    });
+    return { ...gloss, tokens: next, refined: true };
+  };
+
   return {
     id: 'chrome',
     name,
@@ -102,7 +129,19 @@ function mtProvider(name, src, tgt, translate) {
     glossBatch,
     glossSentence: async (text, o) => (await glossBatch([text], o))[0],
     translateText,
+    refineSentence,
   };
+}
+
+/** Достаёт содержимое скобок из перевода; null, если модель скобки потеряла или оставила слово как есть. */
+function extractMarked(translated, word) {
+  const matches = [...String(translated || '').matchAll(/\[([^[\]]{1,80})\]/g)];
+  if (matches.length !== 1) return null;
+  const inner = matches[0][1].replace(/\s+/g, ' ').trim().replace(/^[\s"'«»„“”.,;:!?¿¡]+|[\s"'«»„“”.,;:!?¿¡]+$/g, '');
+  if (!inner || inner.length > 60) return null;
+  if (inner.toLowerCase() === word.toLowerCase()) return null; // не перевела
+  if (inner.split(' ').length > 6) return null; // в скобки попало полпредложения
+  return inner;
 }
 
 export function stubProvider(src = 'en', tgt = 'ru') {

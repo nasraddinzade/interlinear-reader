@@ -100,6 +100,7 @@ export async function glossMissing({ sentences, indexes, provider, batchSize = 1
     if (signal?.aborted) return;
     const batch = queue.shift();
     const texts = batch.map((i) => sentences[i]);
+    const done = [];
     let results;
     try {
       const raw = await withRetry(() => provider.glossBatch(texts, { signal }), {
@@ -159,6 +160,36 @@ export async function glossMissing({ sentences, indexes, provider, batchSize = 1
       if (provider.cacheable) await storeCache(sentence, provider.name, gloss);
       if (signal?.aborted) return;
       onResult(i, { gloss });
+      done.push([i, gloss]);
+    }
+
+    // Второй проход: контекстные переводы слов. Строки уже показаны с черновыми подсказками.
+    if (provider.refineSentence && done.length) {
+      await refineGlosses({ sentences, items: done, provider, onResult, onStatus, signal });
     }
   }
+}
+
+/**
+ * Уточняет подсказки над словами для уже переведённых предложений (items: [[index, gloss], ...]).
+ * Каждое уточнённое предложение сразу отдаётся в onResult и перезаписывается в кэше.
+ */
+export async function refineGlosses({ sentences, items, provider, onResult, onStatus, signal }) {
+  if (!provider.refineSentence) return;
+  let n = 0;
+  for (const [i, gloss] of items) {
+    if (signal?.aborted) return;
+    if (gloss.refined) continue;
+    onStatus?.(`Уточняю подсказки: ${++n} из ${items.length}…`);
+    try {
+      const refined = await provider.refineSentence(sentences[i], gloss, { signal });
+      if (signal?.aborted) return;
+      if (provider.cacheable) await storeCache(sentences[i], provider.name, refined);
+      onResult(i, { gloss: refined });
+    } catch (e) {
+      if (signal?.aborted) return;
+      console.warn('[gloss] refine failed for sentence', i + 1, e);
+    }
+  }
+  onStatus?.('');
 }
