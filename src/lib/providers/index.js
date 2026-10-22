@@ -176,12 +176,18 @@ function mtProvider(id, translate) {
       }),
     }));
   };
+  // Перевод произвольной фразы (выделение в тексте). Кэшируется так же, как слова.
+  const translateText = async (text, { signal } = {}) => {
+    const ru = await translateWords(id, [text], (words) => translate(words, signal));
+    return ru(text);
+  };
   return {
     id,
     name: id,
     cacheable: true,
     glossBatch,
     glossSentence: async (text, o) => (await glossBatch([text], o))[0],
+    translateText,
   };
 }
 
@@ -196,6 +202,7 @@ export function stubProvider() {
     cacheable: false,
     glossBatch: async (texts) => texts.map(gloss),
     glossSentence: async (text) => gloss(text),
+    translateText: async () => '',
   };
 }
 

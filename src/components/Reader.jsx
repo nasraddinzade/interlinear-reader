@@ -7,6 +7,7 @@ import { speak, useSpeakingId } from '../lib/tts.js';
 import { useWords, savedKeySet, isTokenSaved } from '../lib/words.js';
 import WordCard from './WordCard.jsx';
 import { getChromeTranslator, onChromeDownloadProgress } from '../lib/providers/chrome.js';
+import SelectionPopover from './SelectionPopover.jsx';
 
 const cleanForSpeech = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
@@ -17,8 +18,13 @@ function Token({ t, id, saved, speaking, hintMode, tapped, onTap, onOpen }) {
     <span
       className={cls}
       data-tok={id}
+      data-en={t.en}
+      data-gap={t.gap ?? ' '}
       onPointerDown={(e) => { ptype.current = e.pointerType; }}
       onClick={() => {
+        // Клик в конце выделения нескольких слов — это не открытие карточки.
+        const sel = document.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim().includes(' ')) return;
         // На сенсорном экране в режиме «по наведению» первый тап показывает подсказку,
         // второй тап по тому же слову открывает карточку.
         if (hintMode === 'hover' && ptype.current === 'touch' && !tapped && t.ctx) { onTap(id); return; }
@@ -48,6 +54,9 @@ export default function Reader({ id }) {
   const words = useWords();
   const savedKeys = useMemo(() => savedKeySet(words), [words]);
   const runRef = useRef(null);
+  const rowsRef = useRef([]);
+  rowsRef.current = rows;
+  const getProvider = useCallback(() => runRef.current?.provider || null, []);
   const hintMode = settings.hintMode || 'visible';
 
   const providerSig = [settings.provider, settings.keys?.[settings.provider] || '', settings.googleEndpoint || ''].join('|');
@@ -207,7 +216,7 @@ export default function Reader({ id }) {
           const isNewPara = i > 0 && text.paragraphOf?.[i] !== text.paragraphOf?.[i - 1];
           const rowSpeaking = speakingId === sid;
           return (
-            <div key={i} className={['row', isNewPara && 'para', rowSpeaking && 'speaking', row.status].filter(Boolean).join(' ')}>
+            <div key={i} data-index={i} className={['row', isNewPara && 'para', rowSpeaking && 'speaking', row.status].filter(Boolean).join(' ')}>
               <div className="num">{i + 1}</div>
               <button
                 className={`play${rowSpeaking ? ' active' : ''}`}
@@ -262,6 +271,13 @@ export default function Reader({ id }) {
           );
         })}
       </div>
+
+      <SelectionPopover
+        text={text}
+        voice={voice}
+        getProvider={getProvider}
+        getSentenceRu={(i) => rowsRef.current[i]?.gloss?.full || ''}
+      />
 
       {card && (
         <WordCard

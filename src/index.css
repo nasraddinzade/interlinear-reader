@@ -205,3 +205,17 @@ textarea { resize: vertical; line-height: 1.4; }
 .summary p { margin: 0.4rem 0; }
 .steps { padding-left: 1.2rem; margin: 0.3rem 0 0.6rem; }
 .steps li { margin: 0.15rem 0; }
+
+/* ---- Перевод выделения ---- */
+.sel-pop {
+  position: fixed; transform: translateX(-50%); z-index: 40;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.25); padding: 0.5rem 0.7rem; max-width: min(360px, calc(100vw - 2rem));
+  font-size: 0.95rem;
+}
+.sel-phrase { display: flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+.sel-ru { margin: 0.25rem 0 0.4rem; color: var(--fg2); }
+.sel-actions { display: flex; align-items: center; gap: 0.6rem; }
+.sel-actions .icon { margin-left: auto; font-size: 1.1rem; }
+.row .en { user-select: text; }
+.tok .g { user-select: none; }
