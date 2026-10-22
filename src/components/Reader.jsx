@@ -59,7 +59,7 @@ export default function Reader({ id }) {
   const getProvider = useCallback(() => runRef.current?.provider || null, []);
   const hintMode = settings.hintMode || 'visible';
 
-  const providerSig = [settings.provider, settings.keys?.[settings.provider] || '', settings.googleEndpoint || ''].join('|');
+  const providerSig = settings.provider;
 
   useEffect(() => {
     let alive = true;

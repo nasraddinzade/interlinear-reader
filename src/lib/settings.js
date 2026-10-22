@@ -11,11 +11,8 @@ export const HINT_MODE_LABELS = {
   off: 'Без подсказок',
 };
 
-const chromeTranslator = typeof self !== 'undefined' && 'Translator' in self;
-
 const DEFAULTS = {
-  provider: chromeTranslator ? 'chrome' : 'google',
-  keys: {},
+  provider: 'chrome',
   voiceURI: '',
   rate: 1,
   batchSize: 10,
@@ -27,9 +24,12 @@ function load() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULTS };
     const parsed = JSON.parse(raw);
-    const s = { ...DEFAULTS, ...parsed, keys: { ...(parsed.keys || {}) } };
-    if (!['chrome', 'google', 'stub'].includes(s.provider)) s.provider = DEFAULTS.provider; // старые настройки с ИИ-провайдерами
-    if (s.provider === 'google' && !s.keys.google && chromeTranslator) s.provider = 'chrome'; // ключа нет, а встроенный переводчик есть
+    const s = { ...DEFAULTS, ...parsed };
+    delete s.keys; // ключи старых облачных провайдеров больше не нужны
+    delete s.models;
+    delete s.customBaseUrl;
+    delete s.googleEndpoint;
+    if (!['chrome', 'stub'].includes(s.provider)) s.provider = 'chrome';
     return s;
   } catch {
     return { ...DEFAULTS };

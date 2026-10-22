@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { addText } from '../lib/texts.js';
 import { navigate } from '../lib/route.js';
 import { useSettings } from '../lib/settings.js';
-import { providerInfo } from '../lib/providers/index.js';
+import { chromeSupported } from '../lib/providers/chrome.js';
 
 export default function NewText() {
   const settings = useSettings();
@@ -10,8 +10,6 @@ export default function NewText() {
   const [body, setBody] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const info = providerInfo(settings.provider);
-  const keyMissing = info.needsKey && !(settings.keys?.[info.id] || '').trim();
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
@@ -40,13 +38,13 @@ export default function NewText() {
       <h1>Новый текст</h1>
       {settings.provider === 'stub' && (
         <p className="notice">
-          Выбран провайдер без перевода. Текст откроется, но переводов не будет — выберите провайдера и введите ключ в{' '}
+          Выбран режим без перевода. Текст откроется, но переводов не будет — выберите встроенный переводчик в{' '}
           <a href="#/settings">Настройках</a>.
         </p>
       )}
-      {keyMissing && (
+      {settings.provider === 'chrome' && !chromeSupported() && (
         <p className="notice warn">
-          Для провайдера «{info.name}» не задан ключ. <a href="#/settings">Настройки</a>.
+          В этом браузере нет встроенного переводчика. Откройте приложение в Chrome 138+ или Edge.
         </p>
       )}
       <form onSubmit={submit} className="form">

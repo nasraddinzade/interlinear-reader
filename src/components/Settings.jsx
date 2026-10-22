@@ -13,8 +13,8 @@ const CHROME_STATUS = {
   available: 'Готов: языковой пакет en→ru установлен.',
   downloadable: 'Языковой пакет en→ru ещё не скачан.',
   downloading: 'Языковой пакет скачивается…',
-  unavailable: 'Пара en→ru недоступна в этом браузере. Выберите Google Translate.',
-  unsupported: 'В этом браузере нет встроенного переводчика (нужен Chrome 138+ или Edge). Выберите Google Translate.',
+  unavailable: 'Пара en→ru недоступна в этом браузере. Откройте приложение в Chrome 138+ или Edge.',
+  unsupported: 'В этом браузере нет встроенного переводчика (нужен Chrome 138+ или Edge).',
 };
 
 function ChromeStatus() {
@@ -59,13 +59,10 @@ export default function Settings() {
   const s = useSettings();
   const voices = useEnglishVoices();
   const info = providerInfo(s.provider);
-  const [showKey, setShowKey] = useState(false);
   const [test, setTest] = useState(null);
   const [cacheCount, setCacheCount] = useState(null);
 
   useEffect(() => { idb.count('cache').then(setCacheCount); }, [test]);
-
-  const setKey = (v) => updateSettings((st) => ({ ...st, keys: { ...st.keys, [info.id]: v } }));
 
   const runTest = async () => {
     setTest({ busy: true });
@@ -99,28 +96,7 @@ export default function Settings() {
           </select>
         </label>
         <p className="muted small">{info.note}</p>
-        {info.steps && (
-          <ol className="muted small steps">
-            {info.steps.map((st, i) => <li key={i}>{st}</li>)}
-          </ol>
-        )}
         {info.id === 'chrome' && <ChromeStatus />}
-        {info.needsKey && (
-          <label>
-            API-ключ {info.keyUrl && <a href={info.keyUrl} target="_blank" rel="noreferrer">(консоль Google Cloud)</a>}
-            <span className="key-row">
-              <input
-                type={showKey ? 'text' : 'password'}
-                value={s.keys?.[info.id] || ''}
-                onChange={(e) => setKey(e.target.value.trim())}
-                placeholder="Хранится только в этом браузере (localStorage)"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button type="button" onClick={() => setShowKey((v) => !v)}>{showKey ? 'Скрыть' : 'Показать'}</button>
-            </span>
-          </label>
-        )}
         <label>
           Размер пачки (предложений в одном запросе)
           <input type="number" min={1} max={50} value={s.batchSize} onChange={(e) => updateSettings({ batchSize: Math.max(1, Math.min(50, Number(e.target.value) || 10)) })} />
@@ -181,7 +157,7 @@ export default function Settings() {
       <section>
         <h2>Кэш переводов</h2>
         <p className="muted small">
-          Переведённые предложения хранятся в IndexedDB и не запрашиваются повторно. Ключ — хэш предложения плюс имя провайдера.
+          Переведённые предложения, слова и фразы хранятся в IndexedDB и не переводятся повторно.
           {cacheCount !== null && ` Сейчас в кэше: ${cacheCount}.`}
         </p>
         <button className="danger" onClick={clearCache} disabled={!cacheCount}>Очистить кэш</button>

@@ -40,7 +40,7 @@ export class ChromeTranslatorError extends Error {
 /** Создаёт (или возвращает уже созданный) переводчик. Может запустить загрузку пакета. */
 export function getChromeTranslator() {
   if (!chromeSupported()) {
-    return Promise.reject(new ChromeTranslatorError('В этом браузере нет встроенного переводчика (нужен Chrome 138+ или Edge). Выберите Google Translate в настройках.', 'unsupported'));
+    return Promise.reject(new ChromeTranslatorError('В этом браузере нет встроенного переводчика (нужен Chrome 138+ или Edge).', 'unsupported'));
   }
   if (!translatorPromise) {
     translatorPromise = self.Translator.create({
@@ -56,7 +56,7 @@ export function getChromeTranslator() {
         throw new ChromeTranslatorError('Нужно скачать языковой пакет en→ru. Нажмите «Загрузить языковой пакет».', 'activation');
       }
       if (e?.name === 'NotSupportedError') {
-        throw new ChromeTranslatorError('Браузер не поддерживает перевод en→ru на устройстве. Выберите Google Translate в настройках.', 'unavailable');
+        throw new ChromeTranslatorError('Браузер не поддерживает перевод en→ru на устройстве.', 'unavailable');
       }
       throw new ChromeTranslatorError('Не удалось запустить встроенный переводчик: ' + (e?.message || e), 'unavailable');
     });
