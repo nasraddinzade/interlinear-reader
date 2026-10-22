@@ -23,7 +23,7 @@ function selectedTokens(range, en) {
   return out;
 }
 
-export default function SelectionPopover({ text, getProvider, getSentenceRu, voice }) {
+export default function SelectionPopover({ text, getProvider, getSentenceRu, voice, lang = 'en', tgt = 'ru' }) {
   const [state, setState] = useState(null);
   const reqRef = useRef(0);
   const speakingId = useSpeakingId();
@@ -56,7 +56,7 @@ export default function SelectionPopover({ text, getProvider, getSentenceRu, voi
         try {
           const [ru, existing] = await Promise.all([
             provider.translateText(phrase),
-            findByToken({ en: phrase, lemma: phraseLemma(phrase) }),
+            findByToken({ en: phrase, lemma: phraseLemma(phrase, lang) }, lang),
           ]);
           if (id === reqRef.current) setState((s) => s && { ...s, ru, loading: false, saved: existing ? 'exists' : null });
         } catch (e) {
@@ -79,14 +79,14 @@ export default function SelectionPopover({ text, getProvider, getSentenceRu, voi
       window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [getProvider]);
+  }, [getProvider, lang]);
 
   if (!state) return null;
 
   const sentence = text.sentences[state.index];
   const save = async () => {
-    const token = { en: state.phrase, ctx: state.ru, lemma: phraseLemma(state.phrase), base: state.ru, pos: 'expression' };
-    const r = await saveWord({ token, sentence, sentenceRu: getSentenceRu(state.index) || '', source: text.title });
+    const token = { en: state.phrase, ctx: state.ru, lemma: phraseLemma(state.phrase, lang), base: state.ru, pos: 'expression' };
+    const r = await saveWord({ token, sentence, sentenceRu: getSentenceRu(state.index) || '', source: text.title, lang, tgt });
     setState((s) => s && { ...s, saved: r.created ? 'created' : r.exampleAdded ? 'example' : 'exists' });
   };
 
@@ -117,9 +117,9 @@ export default function SelectionPopover({ text, getProvider, getSentenceRu, voi
   );
 }
 
-function phraseLemma(phrase) {
+function phraseLemma(phrase, lang = 'en') {
   try {
-    return analyze(phrase).map((t) => t.lemma).join(' ') || phrase;
+    return analyze(phrase, lang).map((t) => t.lemma).join(' ') || phrase;
   } catch {
     return phrase;
   }

@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useWords, deleteWord, exportWordsJson, today } from '../lib/words.js';
 import { speak, useSpeakingId } from '../lib/tts.js';
-import { useSettings } from '../lib/settings.js';
+import { useSettings, voiceFor } from '../lib/settings.js';
+import { langName } from '../lib/languages.js';
 
 export default function Dictionary() {
   const words = useWords();
   const settings = useSettings();
   const speakingId = useSpeakingId();
-  const voice = { voiceURI: settings.voiceURI, rate: settings.rate };
+  const voiceOf = (w) => voiceFor(settings, w.lang || 'en');
+  const [lang, setLang] = useState('');
+  const langs = useMemo(() => [...new Set(words.map((w) => w.lang || 'en'))].sort(), [words]);
   const [q, setQ] = useState('');
   const [source, setSource] = useState('');
   const [pos, setPos] = useState('');
@@ -20,6 +23,7 @@ export default function Dictionary() {
   const shown = useMemo(() => {
     const needle = q.trim().toLowerCase();
     let list = words.filter((w) => {
+      if (lang && (w.lang || 'en') !== lang) return false;
       if (source && w.source !== source && !(w.examples || []).some((e) => e.source === source)) return false;
       if (pos && w.pos !== pos) return false;
       if (needle) {
@@ -36,7 +40,7 @@ export default function Dictionary() {
       default: list.sort((a, b) => b.addedAt.localeCompare(a.addedAt) || byId(b, a));
     }
     return list;
-  }, [words, q, source, pos, sort]);
+  }, [words, q, source, pos, sort, lang]);
 
   const exportJson = () => {
     const blob = new Blob([exportWordsJson(words)], { type: 'application/json' });
@@ -64,6 +68,12 @@ export default function Dictionary() {
       </div>
       <div className="filters">
         <input placeholder="Поиск…" value={q} onChange={(e) => setQ(e.target.value)} />
+        {langs.length > 1 && (
+          <select value={lang} onChange={(e) => setLang(e.target.value)}>
+            <option value="">Все языки</option>
+            {langs.map((l) => <option key={l} value={l}>{langName(l)}</option>)}
+          </select>
+        )}
         <select value={source} onChange={(e) => setSource(e.target.value)}>
           <option value="">Все тексты</option>
           {sources.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -92,15 +102,16 @@ export default function Dictionary() {
               <li key={w.id} className={`list-item word${w.learned ? ' learned' : ''}`}>
                 <div className="list-main">
                   <div className="word-head">
-                    <span className="word-en">{w.en}</span>
+                    <span className="word-en" lang={w.lang || 'en'}>{w.en}</span>
+                    {langs.length > 1 && <span className="chip">{langName(w.lang || 'en')}</span>}
                     {w.lemma && w.lemma.toLowerCase() !== w.en.toLowerCase() && <span className="muted">→ {w.lemma}</span>}
                     {w.pos && <span className="chip">{w.pos}</span>}
                     {w.learned ? <span className="chip ok">выучено</span> : (w.cleanHitDays?.length ? <span className="chip">{w.cleanHitDays.length}/{w.requiredDays}</span> : null)}
-                    <button className={`icon${speakingId === w.id ? ' active' : ''}`} title="Прослушать слово" onClick={() => speak(w.en, { id: w.id, ...voice })}>🔊</button>
+                    <button className={`icon${speakingId === w.id ? ' active' : ''}`} title="Прослушать слово" onClick={() => speak(w.en, { id: w.id, ...voiceOf(w) })}>🔊</button>
                   </div>
                   <div className="word-base">{w.base}{w.ctx && w.ctx !== w.base ? <span className="muted"> · в контексте: {w.ctx}</span> : null}</div>
                   <div className="word-example">
-                    <button className={`icon${speakingId === w.id + 'e' ? ' active' : ''}`} title="Прослушать пример" onClick={() => speak(ex.sentence, { id: w.id + 'e', ...voice })}>🔊</button>
+                    <button className={`icon${speakingId === w.id + 'e' ? ' active' : ''}`} title="Прослушать пример" onClick={() => speak(ex.sentence, { id: w.id + 'e', ...voiceOf(w) })}>🔊</button>
                     <span>{ex.sentence}</span>
                     {ex.source && <span className="muted"> — {ex.source}</span>}
                     {more && (
@@ -113,7 +124,7 @@ export default function Dictionary() {
                     <ul className="examples">
                       {w.examples.slice(1).map((e, i) => (
                         <li key={i}>
-                          <button className={`icon${speakingId === `${w.id}e${i}` ? ' active' : ''}`} onClick={() => speak(e.sentence, { id: `${w.id}e${i}`, ...voice })}>🔊</button>
+                          <button className={`icon${speakingId === `${w.id}e${i}` ? ' active' : ''}`} onClick={() => speak(e.sentence, { id: `${w.id}e${i}`, ...voiceOf(w) })}>🔊</button>
                           <span>{e.sentence}</span>{e.source && <span className="muted"> — {e.source}</span>}
                         </li>
                       ))}

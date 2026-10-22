@@ -2,6 +2,7 @@
 //   provider.glossSentence(text)            -> { full, tokens }
 //   provider.glossBatch(texts, { signal })  -> [{ full, tokens }, ...]
 //   provider.translateText(text)            -> string
+// Провайдер создаётся для пары языков (язык текста → язык перевода).
 // Перевод делает встроенный переводчик браузера (Translator API); ключей и серверов нет.
 
 import { analyze } from '../gloss-local.js';
@@ -21,12 +22,12 @@ export const PROVIDERS = [
     name: 'Встроенный переводчик браузера (Chrome, Edge)',
     note:
       'Translator API браузера: бесплатно, без ключа и лимитов, перевод выполняется на устройстве. ' +
-      'Языковой пакет en→ru (несколько десятков мегабайт) скачивается один раз. Работает в Chrome 138+ и Edge; в Firefox и Safari недоступен.',
+      'Для каждой пары языков один раз скачивается языковой пакет (несколько десятков мегабайт). Работает в Chrome 138+ и Edge; в Firefox и Safari недоступен.',
   },
   {
     id: 'stub',
     name: 'Без перевода (офлайн-заглушка)',
-    note: 'Текст показывается как есть, переводы пустые; леммы и части речи всё равно считаются локально.',
+    note: 'Текст показывается как есть, переводы пустые; для английского леммы и части речи всё равно считаются локально.',
   },
 ];
 
@@ -61,13 +62,13 @@ async function translateWords(prefix, words, translate) {
 
 const lowerFirst = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : s);
 
-/** Собирает провайдер из функции перевода массива строк. */
-function mtProvider(id, translate) {
+/** Собирает провайдер из функции перевода массива строк для пары языков. */
+function mtProvider(name, src, tgt, translate) {
   const glossBatch = async (texts, { signal } = {}) => {
-    const analyses = texts.map(analyze);
+    const analyses = texts.map((s) => analyze(s, src, tgt));
     const fulls = await translate(texts, signal);
     const lookups = [...new Set(analyses.flat().flatMap((t) => t.lookups))];
-    const ru = await translateWords(id, lookups, (words) => translate(words, signal));
+    const ru = await translateWords(name, lookups, (words) => translate(words, signal));
     return analyses.map((tokens, i) => ({
       full: fulls[i],
       tokens: tokens.map((t) => {
@@ -89,12 +90,14 @@ function mtProvider(id, translate) {
   };
   // Перевод произвольной фразы (выделение в тексте). Кэшируется так же, как слова.
   const translateText = async (text, { signal } = {}) => {
-    const ru = await translateWords(id, [text], (words) => translate(words, signal));
+    const ru = await translateWords(name, [text], (words) => translate(words, signal));
     return ru(text);
   };
   return {
-    id,
-    name: id,
+    id: 'chrome',
+    name,
+    src,
+    tgt,
     cacheable: true,
     glossBatch,
     glossSentence: async (text, o) => (await glossBatch([text], o))[0],
@@ -102,14 +105,16 @@ function mtProvider(id, translate) {
   };
 }
 
-export function stubProvider() {
+export function stubProvider(src = 'en', tgt = 'ru') {
   const gloss = (text) => ({
     full: '',
-    tokens: analyze(text).map((t) => ({ en: t.en, gap: t.gap, ctx: t.rule?.ctx || '', lemma: t.lemma, base: t.rule?.base || '', pos: t.pos })),
+    tokens: analyze(text, src, tgt).map((t) => ({ en: t.en, gap: t.gap, ctx: t.rule?.ctx || '', lemma: t.lemma, base: t.rule?.base || '', pos: t.pos })),
   });
   return {
     id: 'stub',
     name: 'stub',
+    src,
+    tgt,
     cacheable: false,
     glossBatch: async (texts) => texts.map(gloss),
     glossSentence: async (text) => gloss(text),
@@ -117,8 +122,8 @@ export function stubProvider() {
   };
 }
 
-/** Создаёт провайдер по настройкам приложения. */
-export function createProvider(settings) {
-  if (settings.provider === 'stub') return stubProvider();
-  return mtProvider('chrome', (texts, signal) => chromeTranslate(texts, { signal }));
+/** Создаёт провайдер по настройкам приложения для пары языков. */
+export function createProvider(settings, src = 'en', tgt = settings.targetLang || 'ru') {
+  if (settings.provider === 'stub') return stubProvider(src, tgt);
+  return mtProvider(`chrome:${src}>${tgt}`, src, tgt, (texts, signal) => chromeTranslate(texts, src, tgt, { signal }));
 }

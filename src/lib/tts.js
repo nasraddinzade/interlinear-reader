@@ -15,13 +15,16 @@ function setSpeaking(id) {
 
 export const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-export function speak(text, { id = null, voiceURI = '', rate = 1 } = {}) {
+const LANG_DEFAULT = { en: 'en-US', es: 'es-ES', fr: 'fr-FR', de: 'de-DE', it: 'it-IT', pt: 'pt-PT', zh: 'zh-CN', ja: 'ja-JP', ko: 'ko-KR', ar: 'ar-SA', ru: 'ru-RU', uk: 'uk-UA', pl: 'pl-PL', nl: 'nl-NL', tr: 'tr-TR', hi: 'hi-IN' };
+
+export function speak(text, { id = null, lang = 'en', voiceURI = '', rate = 1 } = {}) {
   if (!ttsSupported || !text) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
-  const voice = voiceURI ? window.speechSynthesis.getVoices().find((v) => v.voiceURI === voiceURI) : null;
+  const all = window.speechSynthesis.getVoices();
+  const voice = (voiceURI && all.find((v) => v.voiceURI === voiceURI)) || voicesForLang(lang)[0] || null;
   if (voice) u.voice = voice;
-  u.lang = voice?.lang || 'en-US';
+  u.lang = voice?.lang || LANG_DEFAULT[lang] || lang;
   u.rate = Math.min(2, Math.max(0.5, Number(rate) || 1));
   const done = () => { if (current === u) { current = null; setSpeaking(null); } };
   u.onend = done;
@@ -52,7 +55,7 @@ const voiceListeners = new Set();
 let voices = [];
 function refreshVoices() {
   if (!ttsSupported) return;
-  voices = window.speechSynthesis.getVoices().filter((v) => /^en[-_](US|GB)/i.test(v.lang));
+  voices = window.speechSynthesis.getVoices();
   voiceListeners.forEach((fn) => fn());
 }
 if (ttsSupported) {
@@ -63,7 +66,13 @@ if (ttsSupported) {
   const t = setInterval(() => { refreshVoices(); if (voices.length || ++tries > 10) clearInterval(t); }, 500);
 }
 
-export function useEnglishVoices() {
+/** Голоса для языка (по префиксу BCP-47: en → en-US, en-GB, …). */
+export function voicesForLang(lang) {
+  const prefix = String(lang || '').toLowerCase().split('-')[0];
+  return voices.filter((v) => v.lang.toLowerCase().split(/[-_]/)[0] === prefix);
+}
+
+export function useVoices() {
   return useSyncExternalStore(
     (fn) => { voiceListeners.add(fn); return () => voiceListeners.delete(fn); },
     () => voices,

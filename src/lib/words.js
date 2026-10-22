@@ -35,12 +35,13 @@ async function nextId() {
   return 'w_' + String(n).padStart(4, '0');
 }
 
-function tokenKey(token) {
-  return wordKey(token.lemma) || wordKey(token.en);
+// Ключ записи включает язык текста: «son» по-испански и «son» по-английски — разные слова.
+function tokenKey(token, lang = 'en') {
+  return `${lang}:${wordKey(token.lemma) || wordKey(token.en)}`;
 }
 
-export async function findByToken(token) {
-  const key = tokenKey(token);
+export async function findByToken(token, lang = 'en') {
+  const key = tokenKey(token, lang);
   const all = await idb.getAll('words');
   return all.find((w) => w.key === key) || null;
 }
@@ -50,10 +51,10 @@ export async function findByToken(token) {
  * предложение добавляется в массив examples существующей записи.
  * Возвращает { word, created, exampleAdded }.
  */
-export async function saveWord({ token, sentence, sentenceRu, source }) {
-  const key = tokenKey(token);
+export async function saveWord({ token, sentence, sentenceRu, source, lang = 'en', tgt = 'ru' }) {
+  const key = tokenKey(token, lang);
   const example = { en: token.en, ctx: token.ctx, sentence, sentenceRu: sentenceRu || '', source: source || '' };
-  const existing = await findByToken(token);
+  const existing = await findByToken(token, lang);
   if (existing) {
     const dup = (existing.examples || []).some((e) => e.sentence === sentence);
     if (!dup) {
@@ -66,6 +67,8 @@ export async function saveWord({ token, sentence, sentenceRu, source }) {
   const word = {
     id: await nextId(),
     key,
+    lang,
+    tgt,
     en: token.en.replace(/^[\s"“'‘(\[]+|[\s"”'’)\].,;:!?]+$/g, ''),
     lemma: token.lemma || token.en,
     ctx: token.ctx,
@@ -123,17 +126,19 @@ export function applyAnswer(word, knew) {
 export function savedKeySet(words) {
   const set = new Set();
   for (const w of words) {
-    set.add(w.key);
-    set.add(wordKey(w.en));
-    for (const e of w.examples || []) set.add(wordKey(e.en));
+    const lang = w.lang || 'en';
+    set.add(w.key.includes(':') ? w.key : `${lang}:${w.key}`);
+    set.add(`${lang}:${wordKey(w.en)}`);
+    for (const e of w.examples || []) set.add(`${lang}:${wordKey(e.en)}`);
   }
-  set.delete('');
   return set;
 }
 
-export function isTokenSaved(token, keySet) {
+export function isTokenSaved(token, keySet, lang = 'en') {
   if (!keySet || keySet.size === 0) return false;
-  return keySet.has(wordKey(token.lemma)) || keySet.has(wordKey(token.en));
+  const l = wordKey(token.lemma);
+  const e = wordKey(token.en);
+  return (l && keySet.has(`${lang}:${l}`)) || (e && keySet.has(`${lang}:${e}`));
 }
 
 /** Хук: список слов, обновляется при любом изменении словаря. */

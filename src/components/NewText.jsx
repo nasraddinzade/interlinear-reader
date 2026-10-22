@@ -1,15 +1,34 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { addText } from '../lib/texts.js';
 import { navigate } from '../lib/route.js';
-import { useSettings } from '../lib/settings.js';
-import { chromeSupported } from '../lib/providers/chrome.js';
+import { useSettings, updateSettings } from '../lib/settings.js';
+import { chromeSupported, detectLanguage } from '../lib/providers/chrome.js';
+import { LANGUAGES, langName } from '../lib/languages.js';
 
 export default function NewText() {
   const settings = useSettings();
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [lang, setLang] = useState(settings.sourceLang || 'en');
+  const [detected, setDetected] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const detectTimer = useRef(null);
+
+  // Автоопределение языка вставленного текста (LanguageDetector API), если он есть.
+  useEffect(() => {
+    clearTimeout(detectTimer.current);
+    if (body.trim().length < 40) return undefined;
+    detectTimer.current = setTimeout(async () => {
+      const code = await detectLanguage(body);
+      if (code && code !== lang && LANGUAGES.some((l) => l.code === code)) {
+        setLang(code);
+        setDetected(code);
+      }
+    }, 400);
+    return () => clearTimeout(detectTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [body]);
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
@@ -24,7 +43,9 @@ export default function NewText() {
     setError('');
     setBusy(true);
     try {
-      const t = await addText({ title, body });
+      if (!settings.languages.includes(lang)) updateSettings((s) => ({ ...s, languages: [...s.languages, lang] }));
+      updateSettings({ sourceLang: lang });
+      const t = await addText({ title, body, lang });
       navigate(`read/${t.id}`);
     } catch (err) {
       setError(err.message);
@@ -48,12 +69,26 @@ export default function NewText() {
         </p>
       )}
       <form onSubmit={submit} className="form">
+        <div className="form-grid">
+          <label>
+            Название (необязательно)
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например, глава 1" />
+          </label>
+          <label>
+            Язык текста{detected === lang && detected ? <span className="muted"> · определён автоматически</span> : null}
+            <select value={lang} onChange={(e) => { setLang(e.target.value); setDetected(''); }}>
+              {LANGUAGES.filter((l) => l.code !== settings.targetLang).map((l) => (
+                <option key={l.code} value={l.code}>{l.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <p className="muted small">
+          Перевод на {langName(settings.targetLang)} (меняется в <a href="#/settings">Настройках</a>).
+          {lang !== 'en' && ' Леммы, части речи и фразовые глаголы считаются только для английского; для других языков слова переводятся как есть.'}
+        </p>
         <label>
-          Название (необязательно)
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например, глава 1" />
-        </label>
-        <label>
-          Английский текст
+          Текст
           <textarea
             value={body}
             onChange={(e) => setBody(e.target.value)}

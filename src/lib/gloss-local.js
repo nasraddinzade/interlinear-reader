@@ -3,6 +3,7 @@
 // библиотекой compromise, без запросов к сети.
 
 import nlp from 'compromise';
+import { NO_SPACES } from './languages.js';
 
 const ARTICLES = {
   a: 'неопределённый артикль, не переводится',
@@ -47,11 +48,48 @@ function posOf(tags) {
 const stripPunct = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
 /**
- * Разбирает предложение на токены по пробелам, сопоставляет им термы compromise,
- * склеивает фразовые глаголы с частицей и вычисляет lemma, pos и правила.
+ * Разбирает предложение на токены. Для английского — через compromise: леммы, части речи,
+ * фразовые глаголы и правила для служебных слов (правила только при переводе на русский).
+ * Для остальных языков — слова как есть: по пробелам, а для языков без пробелов через Intl.Segmenter.
  * Возвращает [{ en, gap, word, lemma, pos, isName, rule: { ctx, base } | null, lookups: [] }].
  */
-export function analyze(sentence) {
+export function analyze(sentence, lang = 'en', target = 'ru') {
+  if (!lang.startsWith('en')) return analyzeGeneric(sentence, lang);
+  return analyzeEnglish(sentence, target === 'ru');
+}
+
+const stripPunctGeneric = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+
+function analyzeGeneric(sentence, lang) {
+  const tokens = [];
+  if (NO_SPACES.has(lang) && typeof Intl !== 'undefined' && Intl.Segmenter) {
+    // Языки без пробелов: слова от сегментатора, пунктуация прилипает к предыдущему слову.
+    const seg = new Intl.Segmenter(lang, { granularity: 'word' });
+    let prevEnd = 0;
+    for (const s of seg.segment(sentence)) {
+      const text = s.segment;
+      if (/^\s+$/.test(text)) continue;
+      if (!s.isWordLike && tokens.length) { tokens[tokens.length - 1].en += text; prevEnd = s.index + text.length; continue; }
+      tokens.push({ en: text, gap: sentence.slice(prevEnd, s.index) });
+      prevEnd = s.index + text.length;
+    }
+  } else {
+    const re = /\S+/g;
+    let m;
+    let prevEnd = 0;
+    while ((m = re.exec(sentence))) {
+      tokens.push({ en: m[0], gap: sentence.slice(prevEnd, m.index) });
+      prevEnd = m.index + m[0].length;
+    }
+  }
+  return tokens.map((t) => {
+    const word = stripPunctGeneric(t.en);
+    const lower = word.toLowerCase();
+    return { en: t.en, gap: t.gap, word, lower, lemma: lower, pos: '', isName: false, rule: null, lookups: word ? [lower] : [] };
+  });
+}
+
+function analyzeEnglish(sentence, toRussian) {
   // 1. Токены по пробелам с точными границами.
   const tokens = [];
   const re = /\S+/g;
@@ -122,7 +160,7 @@ export function analyze(sentence) {
     if (isName) { pos = 'name'; lemma = word; }
 
     let rule = null;
-    const single = tok.terms.length <= 1;
+    const single = toRussian && tok.terms.length <= 1;
     if (single && ARTICLES[lower] && tags.includes('Determiner')) {
       rule = { ctx: '–', base: ARTICLES[lower] };
       pos = 'art';

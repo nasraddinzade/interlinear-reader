@@ -4,21 +4,21 @@ import { findByToken, saveWord } from '../lib/words.js';
 
 const clean = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
 
-export default function WordCard({ token, sentence, sentenceRu, source, voice, onClose }) {
+export default function WordCard({ token, sentence, sentenceRu, source, lang = 'en', tgt = 'ru', voice, onClose }) {
   const [existing, setExisting] = useState(null);
   const [msg, setMsg] = useState('');
   const speakingId = useSpeakingId();
 
   useEffect(() => {
     let alive = true;
-    findByToken(token).then((w) => { if (alive) setExisting(w); });
+    findByToken(token, lang).then((w) => { if (alive) setExisting(w); });
     return () => { alive = false; };
-  }, [token]);
+  }, [token, lang]);
 
   const alreadyHasExample = existing && (existing.examples || []).some((e) => e.sentence === sentence);
 
   const save = async () => {
-    const r = await saveWord({ token, sentence, sentenceRu, source });
+    const r = await saveWord({ token, sentence, sentenceRu, source, lang, tgt });
     setExisting(r.word);
     setMsg(r.created ? 'Сохранено в словарь' : r.exampleAdded ? 'Пример добавлен к существующей записи' : 'Уже в словаре с этим примером');
   };
@@ -33,9 +33,11 @@ export default function WordCard({ token, sentence, sentenceRu, source, voice, o
           {token.pos && <span className="chip">{token.pos}</span>}
         </div>
         <dl className="card-grid">
-          <dt>В контексте</dt><dd>{token.ctx || <span className="muted">—</span>}</dd>
-          <dt>Начальная форма</dt><dd>{token.lemma || <span className="muted">—</span>}</dd>
-          <dt>Словарь</dt><dd>{token.base || <span className="muted">—</span>}</dd>
+          <dt>Перевод</dt><dd>{token.ctx || <span className="muted">—</span>}</dd>
+          {token.lemma && token.lemma.toLowerCase() !== token.en.toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, '') && (
+            <><dt>Начальная форма</dt><dd>{token.lemma}</dd></>
+          )}
+          {token.base && token.base !== token.ctx && <><dt>Словарь</dt><dd>{token.base}</dd></>}
         </dl>
         <div className="card-sentence">
           <button className={`icon${speakingId === 'card-sent' ? ' active' : ''}`} title="Прослушать предложение" onClick={() => speak(sentence, { id: 'card-sent', ...voice })}>🔊</button>

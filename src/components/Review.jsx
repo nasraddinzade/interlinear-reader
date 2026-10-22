@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { listWords, putWord, applyAnswer, today } from '../lib/words.js';
 import { speak, useSpeakingId } from '../lib/tts.js';
-import { useSettings } from '../lib/settings.js';
+import { useSettings, voiceFor } from '../lib/settings.js';
 
 // Очередь: невыученные слова. Сначала недавно забытые, потом с меньшей серией,
 // слова с верным ответом сегодня — в конец (они всё равно не засчитаются дважды).
@@ -23,7 +23,7 @@ function buildQueue(words) {
 export default function Review() {
   const settings = useSettings();
   const speakingId = useSpeakingId();
-  const voice = { voiceURI: settings.voiceURI, rate: settings.rate };
+  const voiceOf = (w) => voiceFor(settings, w?.lang || 'en');
   const [all, setAll] = useState(null);
   const [queue, setQueue] = useState([]);
   const [revealed, setRevealed] = useState(false);
@@ -100,11 +100,11 @@ export default function Review() {
       <div className="flashcard">
         <div className="fc-word">
           <span>{current.en}</span>
-          <button className={`icon${speakingId === 'fc-w' ? ' active' : ''}`} title="Прослушать слово" onClick={() => speak(current.en, { id: 'fc-w', ...voice })}>🔊</button>
+          <button className={`icon${speakingId === 'fc-w' ? ' active' : ''}`} title="Прослушать слово" onClick={() => speak(current.en, { id: 'fc-w', ...voiceOf(current) })}>🔊</button>
         </div>
         {example && (
           <div className="fc-sentence">
-            <button className={`icon${speakingId === 'fc-s' ? ' active' : ''}`} title="Прослушать пример" onClick={() => speak(example.sentence, { id: 'fc-s', ...voice })}>🔊</button>
+            <button className={`icon${speakingId === 'fc-s' ? ' active' : ''}`} title="Прослушать пример" onClick={() => speak(example.sentence, { id: 'fc-s', ...voiceOf(current) })}>🔊</button>
             <span>{example.sentence}</span>
           </div>
         )}

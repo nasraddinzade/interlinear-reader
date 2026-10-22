@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { getText } from '../lib/texts.js';
 import { createProvider } from '../lib/providers/index.js';
 import { lookupCache, glossMissing } from '../lib/translate.js';
-import { useSettings, updateSettings, HINT_MODES, HINT_MODE_LABELS, getSettings } from '../lib/settings.js';
+import { useSettings, updateSettings, HINT_MODES, HINT_MODE_LABELS, getSettings, voiceFor } from '../lib/settings.js';
 import { speak, useSpeakingId } from '../lib/tts.js';
 import { useWords, savedKeySet, isTokenSaved } from '../lib/words.js';
+import { langName } from '../lib/languages.js';
 import WordCard from './WordCard.jsx';
-import { getChromeTranslator, onChromeDownloadProgress } from '../lib/providers/chrome.js';
+import { getChromeTranslator, onChromeDownloadProgress, pairKey } from '../lib/providers/chrome.js';
 import SelectionPopover from './SelectionPopover.jsx';
 
 const cleanForSpeech = (s) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
@@ -58,8 +59,10 @@ export default function Reader({ id }) {
   rowsRef.current = rows;
   const getProvider = useCallback(() => runRef.current?.provider || null, []);
   const hintMode = settings.hintMode || 'visible';
+  const lang = text?.lang || 'en';
+  const tgt = settings.targetLang || 'ru';
 
-  const providerSig = settings.provider;
+  const providerSig = `${settings.provider}|${lang}|${tgt}`;
 
   useEffect(() => {
     let alive = true;
@@ -77,12 +80,12 @@ export default function Reader({ id }) {
     if (r.error && /языковой пакет/i.test(r.error)) setNeedsDownload(true);
   }, []);
 
-  useEffect(() => onChromeDownloadProgress((p) => setDownloadProgress(p)), []);
+  useEffect(() => onChromeDownloadProgress((key, p) => { if (key === pairKey(lang, tgt)) setDownloadProgress(p); }), [lang, tgt]);
 
   const downloadPack = async () => {
     setDownloadProgress(0);
     try {
-      await getChromeTranslator();
+      await getChromeTranslator(lang, tgt);
       setNeedsDownload(false);
       setRunKey((k) => k + 1); // перезапускаем перевод
     } catch (e) {
@@ -101,7 +104,7 @@ export default function Reader({ id }) {
     setNeedsDownload(false);
     let provider;
     try {
-      provider = createProvider(getSettings());
+      provider = createProvider(getSettings(), text.lang || 'en', getSettings().targetLang || 'ru');
     } catch (e) {
       setFatal(e.message);
       setRows(text.sentences.map(() => ({ status: 'error', error: e.message })));
@@ -172,7 +175,7 @@ export default function Reader({ id }) {
   if (text === undefined) return <div className="page"><p className="muted">Загрузка…</p></div>;
   if (text === null) return <div className="page"><p className="error">Текст не найден. <a href="#/library">В библиотеку</a></p></div>;
 
-  const voice = { voiceURI: settings.voiceURI, rate: settings.rate };
+  const voice = voiceFor(settings, lang);
   const done = rows.filter((r) => r.status === 'done').length;
   const errors = rows.filter((r) => r.status === 'error').length;
   const total = text.sentences.length;
@@ -183,6 +186,7 @@ export default function Reader({ id }) {
       <div className="reader-bar">
         <div className="reader-title" title={text.title}>{text.title}</div>
         <div className="reader-progress">
+          <span className="muted">{langName(lang)} → {langName(tgt)}</span>
           {inProgress ? (
             <>
               <span>Переведено {done} из {total}</span>
@@ -202,14 +206,14 @@ export default function Reader({ id }) {
       {fatal && <p className="notice warn">{fatal} <a href="#/settings">Настройки</a></p>}
       {needsDownload && (
         <p className="notice">
-          Встроенному переводчику нужен языковой пакет en→ru (скачивается один раз).{' '}
+          Встроенному переводчику нужен языковой пакет {langName(lang)} → {langName(tgt)} (скачивается один раз).{' '}
           <button className="primary small" onClick={downloadPack} disabled={downloadProgress !== null}>
             {downloadProgress !== null ? `Скачивается… ${Math.round(downloadProgress * 100)}%` : 'Загрузить языковой пакет'}
           </button>
         </p>
       )}
 
-      <div className="rows">
+      <div className="rows" lang={lang}>
         {text.sentences.map((sentence, i) => {
           const row = rows[i] || { status: 'pending' };
           const sid = `s${i}`;
@@ -236,7 +240,7 @@ export default function Reader({ id }) {
                           t={t}
                           id={tid}
                           hintMode={hintMode}
-                          saved={isTokenSaved(t, savedKeys)}
+                          saved={isTokenSaved(t, savedKeys, lang)}
                           speaking={speakingId === tid}
                           tapped={tapped === tid}
                           onTap={setTapped}
@@ -256,7 +260,7 @@ export default function Reader({ id }) {
                   <button className="warn-btn" title={`Разбивка не совпала с оригиналом: ${row.gloss.alignError || ''}. Нажмите, чтобы перевести заново.`} onClick={() => retryRow(i)}>⚠</button>
                 )}
               </div>
-              <div className="ru">
+              <div className="ru" lang={tgt}>
                 {row.status === 'done' ? (
                   row.gloss.full || <span className="muted">—</span>
                 ) : row.status === 'error' ? (
@@ -275,6 +279,8 @@ export default function Reader({ id }) {
       <SelectionPopover
         text={text}
         voice={voice}
+        lang={lang}
+        tgt={tgt}
         getProvider={getProvider}
         getSentenceRu={(i) => rowsRef.current[i]?.gloss?.full || ''}
       />
@@ -285,6 +291,8 @@ export default function Reader({ id }) {
           sentence={card.sentence}
           sentenceRu={card.sentenceRu}
           source={text.title}
+          lang={lang}
+          tgt={tgt}
           voice={voice}
           onClose={() => setCard(null)}
         />
